@@ -409,14 +409,12 @@ function StandingsPage({
                 sortKey="points"
                 sort={sort}
                 onToggle={toggleSort}
-                align="right"
               />
               <SortHeader
                 label="GP"
                 sortKey="games_played"
                 sort={sort}
                 onToggle={toggleSort}
-                align="right"
               />
               <SortHeader
                 label="Record"
@@ -429,21 +427,18 @@ function StandingsPage({
                 sortKey="goals_for"
                 sort={sort}
                 onToggle={toggleSort}
-                align="right"
               />
               <SortHeader
                 label="GA"
                 sortKey="goals_against"
                 sort={sort}
                 onToggle={toggleSort}
-                align="right"
               />
               <SortHeader
                 label="GD"
                 sortKey="goal_differential"
                 sort={sort}
                 onToggle={toggleSort}
-                align="right"
               />
             </tr>
           </thead>
@@ -462,12 +457,12 @@ function StandingsPage({
                   </button>
                 </td>
                 <td title={fullNameFor(s.conference)}>{labelFor(s.conference)}</td>
-                <td className="right">{s.points}</td>
-                <td className="right">{s.games_played}</td>
+                <td>{s.points}</td>
+                <td>{s.games_played}</td>
                 <td>{`${s.wins}-${s.losses}-${s.ties}`}</td>
-                <td className="right">{s.goals_for}</td>
-                <td className="right">{s.goals_against}</td>
-                <td className="right">{s.goals_for - s.goals_against}</td>
+                <td>{s.goals_for}</td>
+                <td>{s.goals_against}</td>
+                <td>{s.goals_for - s.goals_against}</td>
               </tr>
             ))}
           </tbody>
@@ -583,7 +578,7 @@ function LeadersPage({
               <th>Player</th>
               <th>Team</th>
               <th>Conf</th>
-              <th className="right">
+              <th>
                 {LEADER_CATEGORIES.find((c) => c.key === category)?.label}
               </th>
             </tr>
@@ -604,7 +599,7 @@ function LeadersPage({
                   </button>
                 </td>
                 <td title={fullNameFor(r.conference)}>{labelFor(r.conference)}</td>
-                <td className="right">{pickValue(r, category)}</td>
+                <td>{pickValue(r, category)}</td>
               </tr>
             ))}
           </tbody>
@@ -736,7 +731,6 @@ function RosterPage({
                 sortKey="jersey_number"
                 sort={sort}
                 onToggle={toggleSort}
-                align="right"
               />
               <SortHeader label="Name" sortKey="name" sort={sort} onToggle={toggleSort} />
               <SortHeader label="Pos" sortKey="position" sort={sort} onToggle={toggleSort} />
@@ -758,52 +752,47 @@ function RosterPage({
                 sortKey="games_played"
                 sort={sort}
                 onToggle={toggleSort}
-                align="right"
               />
               <SortHeader
                 label="GS"
                 sortKey="games_started"
                 sort={sort}
                 onToggle={toggleSort}
-                align="right"
               />
               <SortHeader
                 label="MIN"
                 sortKey="minutes"
                 sort={sort}
                 onToggle={toggleSort}
-                align="right"
               />
               <SortHeader
                 label="G"
                 sortKey="goals"
                 sort={sort}
                 onToggle={toggleSort}
-                align="right"
               />
               <SortHeader
                 label="A"
                 sortKey="assists"
                 sort={sort}
                 onToggle={toggleSort}
-                align="right"
               />
             </tr>
           </thead>
           <tbody>
             {sortedRows.map((p, i) => (
               <tr key={`${p.jersey_number}-${p.name}-${i}`}>
-                <td className="right">{p.jersey_number}</td>
+                <td>{p.jersey_number}</td>
                 <td>{p.name}</td>
                 <td>{p.position}</td>
                 <td>{p.class_year}</td>
                 <td>{p.height}</td>
                 <td>{p.hometown}</td>
-                <td className="right">{fmtStat(p.games_played)}</td>
-                <td className="right">{fmtStat(p.games_started)}</td>
-                <td className="right">{fmtStat(p.minutes)}</td>
-                <td className="right">{fmtStat(p.goals)}</td>
-                <td className="right">{fmtStat(p.assists)}</td>
+                <td>{fmtStat(p.games_played)}</td>
+                <td>{fmtStat(p.games_started)}</td>
+                <td>{fmtStat(p.minutes)}</td>
+                <td>{fmtStat(p.goals)}</td>
+                <td>{fmtStat(p.assists)}</td>
               </tr>
             ))}
           </tbody>
