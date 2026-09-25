@@ -420,6 +420,14 @@ type StandingSortKey =
   | "goals_against"
   | "goal_differential";
 
+type StandingsMode = "all" | "conference" | "non_conference";
+
+const STANDINGS_MODES: { key: StandingsMode; label: string }[] = [
+  { key: "all", label: "Overall" },
+  { key: "conference", label: "Conference" },
+  { key: "non_conference", label: "Non-conference" },
+];
+
 function StandingsPage({
   conference,
   onOpenRoster,
@@ -431,14 +439,18 @@ function StandingsPage({
   const [error, setError] = useState<string | null>(null);
   const [sort, toggleSort] = useSortSpec<StandingSortKey>();
   const [query, setQuery] = useState<string>("");
+  const [mode, setMode] = useState<StandingsMode>("all");
 
   useEffect(() => {
     setStandings(null);
     setError(null);
-    invoke<Standing[]>("list_standings", { conference: conference || null })
+    invoke<Standing[]>("list_standings", {
+      conference: conference || null,
+      mode,
+    })
       .then(setStandings)
       .catch((e) => setError(String(e)));
-  }, [conference]);
+  }, [conference, mode]);
 
   const sortedRows = useMemo(() => {
     if (!standings) return standings;
@@ -472,6 +484,19 @@ function StandingsPage({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+        <div className="segmented" role="tablist" aria-label="Games included">
+          {STANDINGS_MODES.map((m) => (
+            <button
+              key={m.key}
+              role="tab"
+              aria-selected={mode === m.key}
+              className={`segment ${mode === m.key ? "segment-active" : ""}`}
+              onClick={() => setMode(m.key)}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
       </div>
       {error && (
         <p className="error" role="alert">

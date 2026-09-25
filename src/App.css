@@ -156,6 +156,42 @@
   align-items: center;
   gap: 12px;
   margin: 8px 0 16px;
+  flex-wrap: wrap;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.segment {
+  background: var(--input-bg);
+  color: var(--text);
+  border: none;
+  padding: 5px 12px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  cursor: pointer;
+  border-right: 1px solid var(--input-border);
+}
+
+.segment:last-child {
+  border-right: none;
+}
+
+.segment:hover {
+  background: var(--header-hover);
+}
+
+.segment-active {
+  background: var(--link);
+  color: var(--input-bg);
+}
+
+.segment-active:hover {
+  background: var(--link);
 }
 
 .filter select,

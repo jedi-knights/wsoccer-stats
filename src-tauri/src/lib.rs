@@ -48,10 +48,38 @@ fn load_games() -> Result<Vec<Game>, String> {
 }
 
 #[tauri::command]
-fn list_standings(conference: Option<String>) -> Result<Vec<Standing>, String> {
-    let mut games = load_games()?;
+fn list_standings(
+    conference: Option<String>,
+    mode: Option<String>,
+) -> Result<Vec<Standing>, String> {
+    let all_games = load_games()?;
+
+    // Build a program_name → conference lookup from every schedule we have
+    // on disk. Used to classify each opponent as conference or non-conference
+    // relative to the schedule owner.
+    let mut name_to_conf: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for g in &all_games {
+        if !g.program_name.is_empty() && !g.conference.is_empty() {
+            name_to_conf
+                .entry(g.program_name.to_lowercase())
+                .or_insert_with(|| g.conference.clone());
+        }
+    }
+    let is_conference_game = |g: &Game| -> bool {
+        name_to_conf
+            .get(&g.opponent.to_lowercase())
+            .is_some_and(|opp_conf| opp_conf == &g.conference)
+    };
+
+    let mut games = all_games;
     if let Some(c) = conference.as_deref().filter(|c| !c.is_empty()) {
         games.retain(|g| g.conference == c);
+    }
+    match mode.as_deref().unwrap_or("all") {
+        "conference" => games.retain(is_conference_game),
+        "non_conference" => games.retain(|g| !is_conference_game(g)),
+        _ => {}
     }
     Ok(standings::compute_standings(&games))
 }
