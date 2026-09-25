@@ -220,6 +220,7 @@ table.standings th.sortable,
 table.roster th.sortable,
 table.leaders th.sortable {
   cursor: pointer;
+  white-space: nowrap;
 }
 
 table.standings th.sortable:hover,
