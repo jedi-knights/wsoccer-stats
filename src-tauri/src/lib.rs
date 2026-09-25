@@ -115,13 +115,18 @@ fn list_roster(slug: String) -> Result<Vec<RosterEntry>, String> {
     let players = roster::read_roster_file(&roster_path)
         .map_err(|e| format!("failed to read {}: {e}", roster_path.display()))?;
 
-    // Stats are optional — a Sidearm-only feature today; WMT programs won't
-    // have a file. Load if present, ignore if not.
+    // Stats are optional. Roster and stats parsers occasionally disagree on
+    // the ``#`` prefix on jersey numbers (some WMT variants keep it,
+    // sidearm strips it, the WMT API returns the plain digit) — normalise
+    // both sides before joining.
+    fn norm(j: &str) -> String {
+        j.trim_start_matches('#').trim().to_string()
+    }
     let stats_path = stats_dir().join(format!("{slug}.ndjson"));
     let stats_by_jersey: HashMap<String, PlayerStats> = if stats_path.exists() {
         let rows = stats::read_stats_file(&stats_path)
             .map_err(|e| format!("failed to read {}: {e}", stats_path.display()))?;
-        rows.into_iter().map(|s| (s.jersey_number.clone(), s)).collect()
+        rows.into_iter().map(|s| (norm(&s.jersey_number), s)).collect()
     } else {
         HashMap::new()
     };
@@ -129,7 +134,7 @@ fn list_roster(slug: String) -> Result<Vec<RosterEntry>, String> {
     let mut entries: Vec<RosterEntry> = players
         .into_iter()
         .map(|p| {
-            let s = stats_by_jersey.get(&p.jersey_number);
+            let s = stats_by_jersey.get(&norm(&p.jersey_number));
             RosterEntry {
                 program_slug: p.program_slug,
                 program_name: p.program_name,
