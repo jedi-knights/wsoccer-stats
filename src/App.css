@@ -292,11 +292,17 @@ a.external-link:hover {
   border-radius: 6px;
 }
 
-.theme-toggle {
+.top-actions {
   position: fixed;
   top: 12px;
   right: 12px;
   z-index: 10;
+  display: flex;
+  gap: 8px;
+}
+
+.theme-toggle,
+.screenshot-btn {
   background: var(--input-bg);
   border: 1px solid var(--input-border);
   color: var(--text);
@@ -308,6 +314,39 @@ a.external-link:hover {
   font-family: inherit;
 }
 
-.theme-toggle:hover {
+.theme-toggle:hover,
+.screenshot-btn:hover {
   background: var(--header-hover);
+}
+
+.screenshot-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  background: var(--text);
+  color: var(--bg);
+  padding: 10px 18px;
+  border-radius: 20px;
+  font-size: 0.9rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  animation: toast-in 180ms ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }

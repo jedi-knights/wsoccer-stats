@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import html2canvas from "html2canvas";
 import "./App.css";
 
 type Standing = {
@@ -165,6 +166,60 @@ function initialTheme(): Theme {
     : "light";
 }
 
+async function captureScreenshotToClipboard(): Promise<"ok" | "no-clipboard" | "denied" | "error"> {
+  try {
+    const canvas = await html2canvas(document.body, {
+      backgroundColor:
+        getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#ffffff",
+      // Ignore the on-screen buttons so the screenshot isn't cluttered.
+      ignoreElements: (el) =>
+        el.classList?.contains("top-actions") || el.classList?.contains("toast"),
+      scale: window.devicePixelRatio || 1,
+    });
+    const blob: Blob | null = await new Promise((resolve) =>
+      canvas.toBlob(resolve, "image/png")
+    );
+    if (!blob) return "error";
+    if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+      return "no-clipboard";
+    }
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    return "ok";
+  } catch (e) {
+    if (String(e).includes("permission")) return "denied";
+    console.error("screenshot failed:", e);
+    return "error";
+  }
+}
+
+function ScreenshotButton({ onDone }: { onDone: (status: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      className="screenshot-btn"
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        const result = await captureScreenshotToClipboard();
+        setBusy(false);
+        onDone(
+          result === "ok"
+            ? "Screenshot copied to clipboard"
+            : result === "no-clipboard"
+              ? "Clipboard API unavailable in this webview"
+              : result === "denied"
+                ? "Clipboard permission denied"
+                : "Screenshot failed"
+        );
+      }}
+      title="Copy screenshot to clipboard (⌘/Ctrl+Shift+C)"
+      aria-label="Copy screenshot to clipboard"
+    >
+      📸
+    </button>
+  );
+}
+
 function ThemeToggle({
   theme,
   onToggle,
@@ -197,6 +252,37 @@ function App() {
   const toggleTheme = () =>
     setTheme((t) => (t === "dark" ? "light" : "dark"));
 
+  const [toast, setToast] = useState<string | null>(null);
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    window.setTimeout(() => setToast(null), 2500);
+  }, []);
+
+  // ⌘/Ctrl + Shift + C — copy a screenshot of the whole app.
+  useEffect(() => {
+    const onKey = async (e: KeyboardEvent) => {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.shiftKey &&
+        (e.key === "C" || e.key === "c")
+      ) {
+        e.preventDefault();
+        const result = await captureScreenshotToClipboard();
+        showToast(
+          result === "ok"
+            ? "Screenshot copied to clipboard"
+            : result === "no-clipboard"
+              ? "Clipboard API unavailable in this webview"
+              : result === "denied"
+                ? "Clipboard permission denied"
+                : "Screenshot failed"
+        );
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showToast]);
+
   const [view, setView] = useState<View>({
     kind: "standings",
     conference: "",
@@ -204,7 +290,15 @@ function App() {
   });
   return (
     <>
-      <ThemeToggle theme={theme} onToggle={toggleTheme} />
+      <div className="top-actions">
+        <ScreenshotButton onDone={showToast} />
+        <ThemeToggle theme={theme} onToggle={toggleTheme} />
+      </div>
+      {toast && (
+        <div className="toast" role="status" aria-live="polite">
+          {toast}
+        </div>
+      )}
       {view.kind === "standings" ? (
         <BrowsePage
           initialConference={view.conference}
