@@ -20,6 +20,10 @@ pub struct GameResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Game {
     pub program_slug: String,
+    /// Conference slug (e.g. "acc", "sec"). Empty string when the producer
+    /// omitted the field — accept older NDJSON without failing to load.
+    #[serde(default)]
+    pub conference: String,
     pub cms: String,
     pub date: String, // ISO YYYY-MM-DD
     pub opponent: String,
@@ -64,9 +68,10 @@ mod tests {
 
     #[test]
     fn parse_line_completed_game() {
-        let line = r#"{"program_slug":"duke","cms":"sidearm","date":"2026-08-12","opponent":"Southern California","home_away":"away","result":{"outcome":"W","team_score":3,"opponent_score":1}}"#;
+        let line = r#"{"program_slug":"duke","conference":"acc","cms":"sidearm","date":"2026-08-12","opponent":"Southern California","home_away":"away","result":{"outcome":"W","team_score":3,"opponent_score":1}}"#;
         let game = parse_line(line).unwrap();
         assert_eq!(game.program_slug, "duke");
+        assert_eq!(game.conference, "acc");
         assert_eq!(game.opponent, "Southern California");
         assert_eq!(game.home_away, "away");
         assert_eq!(
@@ -77,6 +82,14 @@ mod tests {
                 opponent_score: 1
             })
         );
+    }
+
+    #[test]
+    fn parse_line_missing_conference_defaults_to_empty() {
+        // Older NDJSON produced before the conference field was added must still load.
+        let line = r#"{"program_slug":"duke","cms":"sidearm","date":"2026-08-12","opponent":"USC","home_away":"away","result":null}"#;
+        let game = parse_line(line).unwrap();
+        assert_eq!(game.conference, "");
     }
 
     #[test]
