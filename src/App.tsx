@@ -15,6 +15,23 @@ type Standing = {
   points: number;
 };
 
+type GameResult = {
+  outcome: "W" | "L" | "T" | string;
+  team_score: number;
+  opponent_score: number;
+};
+
+type Game = {
+  program_slug: string;
+  program_name: string;
+  conference: string;
+  cms: string;
+  date: string;
+  opponent: string;
+  home_away: string;
+  result: GameResult | null;
+};
+
 type RosterEntry = {
   program_slug: string;
   program_name: string;
@@ -46,8 +63,20 @@ const CONFERENCE_LABELS: Record<string, string> = {
   west_coast: "WCC",
 };
 
+const CONFERENCE_FULL_NAMES: Record<string, string> = {
+  acc: "Atlantic Coast Conference",
+  sec: "Southeastern Conference",
+  big_ten: "Big Ten Conference",
+  big_12: "Big 12 Conference",
+  west_coast: "West Coast Conference",
+};
+
 function labelFor(conf: string): string {
   return CONFERENCE_LABELS[conf] ?? conf;
+}
+
+function fullNameFor(conf: string): string {
+  return CONFERENCE_FULL_NAMES[conf] ?? labelFor(conf);
 }
 
 // ---- sortable table helpers ----------------------------------------------
@@ -132,6 +161,7 @@ function App() {
     <RosterPage
       slug={view.slug}
       name={view.name}
+      fromConference={view.fromConference}
       onBack={() =>
         setView({ kind: "standings", conference: view.fromConference })
       }
@@ -165,6 +195,7 @@ function StandingsPage({
   const [standings, setStandings] = useState<Standing[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sort, toggleSort] = useSortSpec<StandingSortKey>();
+  const [query, setQuery] = useState<string>("");
 
   useEffect(() => {
     invoke<string[]>("list_conferences")
@@ -182,7 +213,13 @@ function StandingsPage({
 
   const sortedRows = useMemo(() => {
     if (!standings) return standings;
-    return applySort(standings, sort, (row, key) => {
+    const needle = query.trim().toLowerCase();
+    const filtered = needle
+      ? standings.filter((s) =>
+          (s.program_name || s.program_slug).toLowerCase().includes(needle)
+        )
+      : standings;
+    return applySort(filtered, sort, (row, key) => {
       switch (key) {
         case "goal_differential":
           return row.goals_for - row.goals_against;
@@ -194,23 +231,34 @@ function StandingsPage({
           return row[key];
       }
     });
-  }, [standings, sort]);
+  }, [standings, sort, query]);
 
   return (
     <main className="container">
       <header className="page-header">
         <h1>Standings</h1>
-        <label className="filter">
-          Conference:{" "}
-          <select value={selected} onChange={(e) => setSelected(e.target.value)}>
-            <option value="">All ({conferences.length})</option>
-            {conferences.map((c) => (
-              <option key={c} value={c}>
-                {labelFor(c)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="filter-group">
+          <label className="filter">
+            <input
+              className="search"
+              type="search"
+              placeholder="Search teams…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </label>
+          <label className="filter">
+            Conference:{" "}
+            <select value={selected} onChange={(e) => setSelected(e.target.value)}>
+              <option value="">All ({conferences.length})</option>
+              {conferences.map((c) => (
+                <option key={c} value={c}>
+                  {labelFor(c)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </header>
       {error && (
         <p className="error" role="alert">
@@ -252,25 +300,10 @@ function StandingsPage({
                 align="right"
               />
               <SortHeader
-                label="W"
+                label="Record"
                 sortKey="wins"
                 sort={sort}
                 onToggle={toggleSort}
-                align="right"
-              />
-              <SortHeader
-                label="L"
-                sortKey="losses"
-                sort={sort}
-                onToggle={toggleSort}
-                align="right"
-              />
-              <SortHeader
-                label="T"
-                sortKey="ties"
-                sort={sort}
-                onToggle={toggleSort}
-                align="right"
               />
               <SortHeader
                 label="GF"
@@ -313,12 +346,10 @@ function StandingsPage({
                     {s.program_name || s.program_slug}
                   </button>
                 </td>
-                <td>{labelFor(s.conference)}</td>
+                <td title={fullNameFor(s.conference)}>{labelFor(s.conference)}</td>
                 <td className="right">{s.points}</td>
                 <td className="right">{s.games_played}</td>
-                <td className="right">{s.wins}</td>
-                <td className="right">{s.losses}</td>
-                <td className="right">{s.ties}</td>
+                <td>{`${s.wins}-${s.losses}-${s.ties}`}</td>
                 <td className="right">{s.goals_for}</td>
                 <td className="right">{s.goals_against}</td>
                 <td className="right">{s.goals_for - s.goals_against}</td>
@@ -353,20 +384,28 @@ function fmtStat(n: number | null): string {
 function RosterPage({
   slug,
   name,
+  fromConference,
   onBack,
 }: {
   slug: string;
   name: string;
+  fromConference: string;
   onBack: () => void;
 }) {
   const [players, setPlayers] = useState<RosterEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sort, toggleSort] = useSortSpec<RosterSortKey>();
 
+  const [games, setGames] = useState<Game[] | null>(null);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+
   useEffect(() => {
     invoke<RosterEntry[]>("list_roster", { slug })
       .then(setPlayers)
       .catch((e) => setError(String(e)));
+    invoke<Game[]>("list_schedule", { slug })
+      .then(setGames)
+      .catch((e) => setScheduleError(String(e)));
   }, [slug]);
 
   const displayName = players?.[0]?.program_name || name;
@@ -393,15 +432,21 @@ function RosterPage({
       <header className="page-header">
         <div>
           <button className="linklike" onClick={onBack}>
-            ← Standings
+            ← {fromConference ? `${labelFor(fromConference)} Standings` : "Standings"}
           </button>
           <h1>{displayName}</h1>
-          {sortedRows && conf && (
-            <p className="subtitle">
-              {labelFor(conf)} · {sortedRows.length} players
-              {!hasStats && sortedRows.length > 0 && " · stats unavailable for this program"}
-            </p>
-          )}
+          <p className="subtitle">
+            {conf || fromConference ? labelFor(conf || fromConference) : " "}
+            {sortedRows
+              ? ` · ${sortedRows.length} player${sortedRows.length === 1 ? "" : "s"}`
+              : sortedRows === null && !error
+                ? " · loading…"
+                : ""}
+            {sortedRows &&
+              !hasStats &&
+              sortedRows.length > 0 &&
+              " · stats unavailable for this program"}
+          </p>
         </div>
       </header>
       {error && (
@@ -490,6 +535,43 @@ function RosterPage({
                 <td className="right">{fmtStat(p.minutes)}</td>
                 <td className="right">{fmtStat(p.goals)}</td>
                 <td className="right">{fmtStat(p.assists)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <h2 className="section-heading">Schedule</h2>
+      {scheduleError && (
+        <p className="error" role="alert">
+          Error: {scheduleError}
+        </p>
+      )}
+      {games === null && !scheduleError && <p>Loading schedule…</p>}
+      {games !== null && games.length === 0 && !scheduleError && (
+        <p>No schedule data for this program.</p>
+      )}
+      {games !== null && games.length > 0 && (
+        <table className="schedule">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Home/Away</th>
+              <th>Opponent</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {games.map((g, i) => (
+              <tr key={`${g.date}-${g.opponent}-${i}`}>
+                <td>{g.date}</td>
+                <td>{g.home_away === "away" ? "at" : g.home_away === "neutral" ? "vs (n)" : "vs"}</td>
+                <td>{g.opponent}</td>
+                <td>
+                  {g.result
+                    ? `${g.result.outcome} ${g.result.team_score}-${g.result.opponent_score}`
+                    : "—"}
+                </td>
               </tr>
             ))}
           </tbody>

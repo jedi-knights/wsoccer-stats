@@ -7,7 +7,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-pub use data::{read_ndjson_dir, Game, GameResult};
+pub use data::{read_ndjson_dir, read_ndjson_file, Game, GameResult};
 pub use roster::{read_roster_file, Player};
 pub use standings::{compute_standings, Standing};
 pub use stats::{read_stats_file, PlayerStats};
@@ -165,6 +165,24 @@ fn list_roster(slug: String) -> Result<Vec<RosterEntry>, String> {
     Ok(entries)
 }
 
+/// Return the ordered list of games for one program's season schedule.
+///
+/// Sorted by ISO date ascending — the producer typically writes them that
+/// way already, but re-sort explicitly so the caller doesn't depend on
+/// filesystem line order.
+#[tauri::command]
+fn list_schedule(slug: String) -> Result<Vec<Game>, String> {
+    validate_slug(&slug)?;
+    let path = schedules_dir().join(format!("{slug}.ndjson"));
+    if !path.exists() {
+        return Err(format!("no schedule on disk for program: {slug}"));
+    }
+    let mut games = data::read_ndjson_file(&path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    games.sort_by(|a, b| a.date.cmp(&b.date));
+    Ok(games)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -172,7 +190,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_standings,
             list_conferences,
-            list_roster
+            list_roster,
+            list_schedule
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

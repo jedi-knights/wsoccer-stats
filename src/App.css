@@ -45,6 +45,22 @@
   color: #555;
 }
 
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.search {
+  padding: 4px 10px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+  background: #fff;
+  min-width: 180px;
+}
+
 .filter select {
   margin-left: 4px;
   padding: 4px 8px;
@@ -56,7 +72,8 @@
 }
 
 table.standings,
-table.roster {
+table.roster,
+table.schedule {
   width: 100%;
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
@@ -65,10 +82,27 @@ table.roster {
 table.standings th,
 table.standings td,
 table.roster th,
-table.roster td {
+table.roster td,
+table.schedule th,
+table.schedule td {
   padding: 6px 10px;
   text-align: left;
   border-bottom: 1px solid #e4e4e4;
+}
+
+.section-heading {
+  margin: 24px 0 8px;
+  font-size: 1.25rem;
+  color: #333;
+}
+
+table.schedule th {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  color: #666;
+  letter-spacing: 0.03em;
+  background: #f0f0f0;
+  text-align: left;
 }
 
 table.standings th,
@@ -110,9 +144,16 @@ table.roster td.right {
   text-align: right;
 }
 
-table.standings tbody tr:hover,
-table.roster tbody tr:hover {
+table.standings tbody tr:nth-child(even),
+table.roster tbody tr:nth-child(even),
+table.schedule tbody tr:nth-child(even) {
   background: #fafafa;
+}
+
+table.standings tbody tr:hover,
+table.roster tbody tr:hover,
+table.schedule tbody tr:hover {
+  background: #eef2fb;
 }
 
 button.linklike {
@@ -152,27 +193,42 @@ button.linklike:hover {
     color: #bbb;
   }
 
-  .filter select {
+  .filter select,
+  .search {
     background: #2a2a2a;
     border-color: #555;
     color: #f6f6f6;
   }
 
   table.standings th,
-  table.roster th {
+  table.roster th,
+  table.schedule th {
     background: #2a2a2a;
   }
 
   table.standings th,
   table.standings td,
   table.roster th,
-  table.roster td {
+  table.roster td,
+  table.schedule th,
+  table.schedule td {
     border-bottom-color: #333;
   }
 
+  table.standings tbody tr:nth-child(even),
+  table.roster tbody tr:nth-child(even),
+  table.schedule tbody tr:nth-child(even) {
+    background: #232323;
+  }
+
   table.standings tbody tr:hover,
-  table.roster tbody tr:hover {
-    background: #262626;
+  table.roster tbody tr:hover,
+  table.schedule tbody tr:hover {
+    background: #2f3444;
+  }
+
+  .section-heading {
+    color: #eee;
   }
 
   button.linklike {
