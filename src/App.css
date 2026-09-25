@@ -79,6 +79,7 @@ table.roster th {
   letter-spacing: 0.03em;
   background: #f0f0f0;
   user-select: none;
+  text-align: left;
 }
 
 table.standings th.sortable,
@@ -104,9 +105,7 @@ table.roster th.sortable:hover {
   margin-left: 4px;
 }
 
-table.standings th.right,
 table.standings td.right,
-table.roster th.right,
 table.roster td.right {
   text-align: right;
 }

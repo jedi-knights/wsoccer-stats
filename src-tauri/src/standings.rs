@@ -22,6 +22,8 @@ pub struct Standing {
     pub goals_for: u32,
     pub goals_against: u32,
     pub games_played: u32,
+    /// Soccer points: 3 per win, 1 per tie, 0 per loss.
+    pub points: u32,
 }
 
 /// Aggregate `games` into per-program standings, sorted by wins desc,
@@ -50,6 +52,7 @@ pub fn compute_standings(games: &[Game]) -> Vec<Standing> {
         entry.goals_for += result.team_score;
         entry.goals_against += result.opponent_score;
         entry.games_played += 1;
+        entry.points = entry.wins * 3 + entry.ties;
 
         // Invariant: every counted game bumped exactly one of W/L/T.
         debug_assert_eq!(entry.wins + entry.losses + entry.ties, entry.games_played);
@@ -58,8 +61,8 @@ pub fn compute_standings(games: &[Game]) -> Vec<Standing> {
     standings.sort_by(|a, b| {
         let gd_a = a.goals_for as i32 - a.goals_against as i32;
         let gd_b = b.goals_for as i32 - b.goals_against as i32;
-        b.wins
-            .cmp(&a.wins)
+        b.points
+            .cmp(&a.points)
             .then_with(|| gd_b.cmp(&gd_a))
             .then_with(|| a.program_slug.cmp(&b.program_slug))
     });
@@ -125,6 +128,8 @@ mod tests {
         assert_eq!(duke.goals_for, 8);
         assert_eq!(duke.goals_against, 4);
         assert_eq!(duke.games_played, 4);
+        // 2 wins * 3 + 1 tie * 1 = 7 points
+        assert_eq!(duke.points, 7);
     }
 
     #[test]

@@ -12,6 +12,7 @@ type Standing = {
   goals_for: number;
   goals_against: number;
   games_played: number;
+  points: number;
 };
 
 type RosterEntry = {
@@ -34,8 +35,8 @@ type RosterEntry = {
 };
 
 type View =
-  | { kind: "standings" }
-  | { kind: "roster"; slug: string; name: string };
+  | { kind: "standings"; conference: string }
+  | { kind: "roster"; slug: string; name: string; fromConference: string };
 
 const CONFERENCE_LABELS: Record<string, string> = {
   acc: "ACC",
@@ -119,16 +120,21 @@ function SortHeader<K extends string>({
 // ---- app ----------------------------------------------------------------
 
 function App() {
-  const [view, setView] = useState<View>({ kind: "standings" });
+  const [view, setView] = useState<View>({ kind: "standings", conference: "" });
   return view.kind === "standings" ? (
     <StandingsPage
-      onOpenRoster={(slug, name) => setView({ kind: "roster", slug, name })}
+      initialConference={view.conference}
+      onOpenRoster={(slug, name, fromConference) =>
+        setView({ kind: "roster", slug, name, fromConference })
+      }
     />
   ) : (
     <RosterPage
       slug={view.slug}
       name={view.name}
-      onBack={() => setView({ kind: "standings" })}
+      onBack={() =>
+        setView({ kind: "standings", conference: view.fromConference })
+      }
     />
   );
 }
@@ -138,6 +144,7 @@ function App() {
 type StandingSortKey =
   | "program_name"
   | "conference"
+  | "points"
   | "games_played"
   | "wins"
   | "losses"
@@ -147,12 +154,14 @@ type StandingSortKey =
   | "goal_differential";
 
 function StandingsPage({
+  initialConference,
   onOpenRoster,
 }: {
-  onOpenRoster: (slug: string, name: string) => void;
+  initialConference: string;
+  onOpenRoster: (slug: string, name: string, fromConference: string) => void;
 }) {
   const [conferences, setConferences] = useState<string[]>([]);
-  const [selected, setSelected] = useState<string>(""); // "" = all
+  const [selected, setSelected] = useState<string>(initialConference); // "" = all
   const [standings, setStandings] = useState<Standing[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sort, toggleSort] = useSortSpec<StandingSortKey>();
@@ -229,6 +238,13 @@ function StandingsPage({
                 onToggle={toggleSort}
               />
               <SortHeader
+                label="PTS"
+                sortKey="points"
+                sort={sort}
+                onToggle={toggleSort}
+                align="right"
+              />
+              <SortHeader
                 label="GP"
                 sortKey="games_played"
                 sort={sort}
@@ -286,7 +302,11 @@ function StandingsPage({
                   <button
                     className="linklike"
                     onClick={() =>
-                      onOpenRoster(s.program_slug, s.program_name || s.program_slug)
+                      onOpenRoster(
+                        s.program_slug,
+                        s.program_name || s.program_slug,
+                        selected
+                      )
                     }
                     title={`Roster for ${s.program_name || s.program_slug}`}
                   >
@@ -294,6 +314,7 @@ function StandingsPage({
                   </button>
                 </td>
                 <td>{labelFor(s.conference)}</td>
+                <td className="right">{s.points}</td>
                 <td className="right">{s.games_played}</td>
                 <td className="right">{s.wins}</td>
                 <td className="right">{s.losses}</td>
