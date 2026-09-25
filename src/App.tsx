@@ -439,7 +439,7 @@ function StandingsPage({
   const [error, setError] = useState<string | null>(null);
   const [sort, toggleSort] = useSortSpec<StandingSortKey>();
   const [query, setQuery] = useState<string>("");
-  const [mode, setMode] = useState<StandingsMode>("all");
+  const [mode, setMode] = useState<StandingsMode>("conference");
 
   useEffect(() => {
     setStandings(null);
