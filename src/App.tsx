@@ -14,7 +14,7 @@ type Standing = {
   games_played: number;
 };
 
-type Player = {
+type RosterEntry = {
   program_slug: string;
   program_name: string;
   conference: string;
@@ -25,6 +25,12 @@ type Player = {
   class_year: string;
   height: string;
   hometown: string;
+  // Present when the program has a stats file and the player appears in it.
+  games_played: number | null;
+  games_started: number | null;
+  minutes: number | null;
+  goals: number | null;
+  assists: number | null;
 };
 
 type View =
@@ -312,7 +318,16 @@ type RosterSortKey =
   | "position"
   | "class_year"
   | "height"
-  | "hometown";
+  | "hometown"
+  | "games_played"
+  | "games_started"
+  | "minutes"
+  | "goals"
+  | "assists";
+
+function fmtStat(n: number | null): string {
+  return n === null ? "—" : String(n);
+}
 
 function RosterPage({
   slug,
@@ -323,18 +338,19 @@ function RosterPage({
   name: string;
   onBack: () => void;
 }) {
-  const [players, setPlayers] = useState<Player[] | null>(null);
+  const [players, setPlayers] = useState<RosterEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sort, toggleSort] = useSortSpec<RosterSortKey>();
 
   useEffect(() => {
-    invoke<Player[]>("list_roster", { slug })
+    invoke<RosterEntry[]>("list_roster", { slug })
       .then(setPlayers)
       .catch((e) => setError(String(e)));
   }, [slug]);
 
   const displayName = players?.[0]?.program_name || name;
   const conf = players?.[0]?.conference;
+  const hasStats = !!players?.some((p) => p.games_played !== null);
 
   const sortedRows = useMemo(() => {
     if (!players) return players;
@@ -343,7 +359,11 @@ function RosterPage({
         const n = parseInt(row.jersey_number, 10);
         return Number.isFinite(n) ? n : row.jersey_number;
       }
-      return row[key];
+      // Numeric stat columns: nulls sort last regardless of direction.
+      // Send Infinity so null > any real number, then invert if desc.
+      const v = row[key];
+      if (v === null) return sort?.dir === "desc" ? -Infinity : Infinity;
+      return v as number | string;
     });
   }, [players, sort]);
 
@@ -358,6 +378,7 @@ function RosterPage({
           {sortedRows && conf && (
             <p className="subtitle">
               {labelFor(conf)} · {sortedRows.length} players
+              {!hasStats && sortedRows.length > 0 && " · stats unavailable for this program"}
             </p>
           )}
         </div>
@@ -382,35 +403,55 @@ function RosterPage({
                 onToggle={toggleSort}
                 align="right"
               />
-              <SortHeader
-                label="Name"
-                sortKey="name"
-                sort={sort}
-                onToggle={toggleSort}
-              />
-              <SortHeader
-                label="Pos"
-                sortKey="position"
-                sort={sort}
-                onToggle={toggleSort}
-              />
+              <SortHeader label="Name" sortKey="name" sort={sort} onToggle={toggleSort} />
+              <SortHeader label="Pos" sortKey="position" sort={sort} onToggle={toggleSort} />
               <SortHeader
                 label="Class"
                 sortKey="class_year"
                 sort={sort}
                 onToggle={toggleSort}
               />
-              <SortHeader
-                label="Ht"
-                sortKey="height"
-                sort={sort}
-                onToggle={toggleSort}
-              />
+              <SortHeader label="Ht" sortKey="height" sort={sort} onToggle={toggleSort} />
               <SortHeader
                 label="Hometown"
                 sortKey="hometown"
                 sort={sort}
                 onToggle={toggleSort}
+              />
+              <SortHeader
+                label="GP"
+                sortKey="games_played"
+                sort={sort}
+                onToggle={toggleSort}
+                align="right"
+              />
+              <SortHeader
+                label="GS"
+                sortKey="games_started"
+                sort={sort}
+                onToggle={toggleSort}
+                align="right"
+              />
+              <SortHeader
+                label="MIN"
+                sortKey="minutes"
+                sort={sort}
+                onToggle={toggleSort}
+                align="right"
+              />
+              <SortHeader
+                label="G"
+                sortKey="goals"
+                sort={sort}
+                onToggle={toggleSort}
+                align="right"
+              />
+              <SortHeader
+                label="A"
+                sortKey="assists"
+                sort={sort}
+                onToggle={toggleSort}
+                align="right"
               />
             </tr>
           </thead>
@@ -423,6 +464,11 @@ function RosterPage({
                 <td>{p.class_year}</td>
                 <td>{p.height}</td>
                 <td>{p.hometown}</td>
+                <td className="right">{fmtStat(p.games_played)}</td>
+                <td className="right">{fmtStat(p.games_started)}</td>
+                <td className="right">{fmtStat(p.minutes)}</td>
+                <td className="right">{fmtStat(p.goals)}</td>
+                <td className="right">{fmtStat(p.assists)}</td>
               </tr>
             ))}
           </tbody>
