@@ -36,6 +36,7 @@ type RosterEntry = {
   program_slug: string;
   program_name: string;
   conference: string;
+  roster_url: string;
   cms: string;
   name: string;
   jersey_number: string;
@@ -51,9 +52,11 @@ type RosterEntry = {
   assists: number | null;
 };
 
+type Tab = "standings" | "leaders";
+
 type View =
-  | { kind: "standings"; conference: string }
-  | { kind: "roster"; slug: string; name: string; fromConference: string };
+  | { kind: "standings"; conference: string; tab: Tab }
+  | { kind: "roster"; slug: string; name: string; fromConference: string; fromTab: Tab };
 
 const CONFERENCE_LABELS: Record<string, string> = {
   acc: "ACC",
@@ -134,13 +137,13 @@ function SortHeader<K extends string>({
   const active = sort?.key === sortKey;
   return (
     <th
-      className={`sortable${align === "right" ? " right" : ""}`}
+      className={`sortable${align === "right" ? " right" : ""}${active ? " sort-active" : ""}`}
       onClick={() => onToggle(sortKey)}
       title="Click to sort"
     >
       <span className="th-label">{label}</span>
       <span className="sort-arrow" aria-hidden="true">
-        {active ? (sort!.dir === "asc" ? "▲" : "▼") : ""}
+        {active ? (sort!.dir === "asc" ? "▲" : "▼") : "↕"}
       </span>
     </th>
   );
@@ -148,24 +151,164 @@ function SortHeader<K extends string>({
 
 // ---- app ----------------------------------------------------------------
 
+type Theme = "light" | "dark";
+
+function initialTheme(): Theme {
+  try {
+    const stored = localStorage.getItem("theme");
+    if (stored === "light" || stored === "dark") return stored;
+  } catch {
+    // ignore inaccessible localStorage
+  }
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
+function ThemeToggle({
+  theme,
+  onToggle,
+}: {
+  theme: Theme;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      className="theme-toggle"
+      onClick={onToggle}
+      title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+      aria-label="Toggle color theme"
+    >
+      {theme === "dark" ? "☀️" : "🌙"}
+    </button>
+  );
+}
+
 function App() {
-  const [view, setView] = useState<View>({ kind: "standings", conference: "" });
-  return view.kind === "standings" ? (
-    <StandingsPage
-      initialConference={view.conference}
-      onOpenRoster={(slug, name, fromConference) =>
-        setView({ kind: "roster", slug, name, fromConference })
-      }
-    />
-  ) : (
-    <RosterPage
-      slug={view.slug}
-      name={view.name}
-      fromConference={view.fromConference}
-      onBack={() =>
-        setView({ kind: "standings", conference: view.fromConference })
-      }
-    />
+  const [theme, setTheme] = useState<Theme>(initialTheme);
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    try {
+      localStorage.setItem("theme", theme);
+    } catch {
+      // ignore
+    }
+  }, [theme]);
+  const toggleTheme = () =>
+    setTheme((t) => (t === "dark" ? "light" : "dark"));
+
+  const [view, setView] = useState<View>({
+    kind: "standings",
+    conference: "",
+    tab: "standings",
+  });
+  return (
+    <>
+      <ThemeToggle theme={theme} onToggle={toggleTheme} />
+      {view.kind === "standings" ? (
+        <BrowsePage
+          initialConference={view.conference}
+          initialTab={view.tab}
+          onOpenRoster={(slug, name, fromConference, fromTab) =>
+            setView({ kind: "roster", slug, name, fromConference, fromTab })
+          }
+        />
+      ) : (
+        <RosterPage
+          slug={view.slug}
+          name={view.name}
+          fromConference={view.fromConference}
+          fromTab={view.fromTab}
+          onBack={() =>
+            setView({
+              kind: "standings",
+              conference: view.fromConference,
+              tab: view.fromTab,
+            })
+          }
+        />
+      )}
+    </>
+  );
+}
+
+// ---- browse (standings + leaders tabs) ---------------------------------
+
+function BrowsePage({
+  initialConference,
+  initialTab,
+  onOpenRoster,
+}: {
+  initialConference: string;
+  initialTab: Tab;
+  onOpenRoster: (
+    slug: string,
+    name: string,
+    fromConference: string,
+    fromTab: Tab
+  ) => void;
+}) {
+  const [conferences, setConferences] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string>(initialConference);
+  const [tab, setTab] = useState<Tab>(initialTab);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    invoke<string[]>("list_conferences")
+      .then(setConferences)
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  return (
+    <main className="container">
+      <header className="page-header">
+        <div className="tabs" role="tablist">
+          <button
+            role="tab"
+            aria-selected={tab === "standings"}
+            className={`tab ${tab === "standings" ? "tab-active" : ""}`}
+            onClick={() => setTab("standings")}
+          >
+            Standings
+          </button>
+          <button
+            role="tab"
+            aria-selected={tab === "leaders"}
+            className={`tab ${tab === "leaders" ? "tab-active" : ""}`}
+            onClick={() => setTab("leaders")}
+          >
+            Leaders
+          </button>
+        </div>
+        <label className="filter" title="Conference filter">
+          Conference:{" "}
+          <select value={selected} onChange={(e) => setSelected(e.target.value)}>
+            <option value="">All ({conferences.length})</option>
+            {conferences.map((c) => (
+              <option key={c} value={c}>
+                {labelFor(c)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </header>
+      {error && (
+        <p className="error" role="alert">
+          Error: {error}
+        </p>
+      )}
+      {tab === "standings" ? (
+        <StandingsPage
+          conference={selected}
+          onOpenRoster={(slug, name) => onOpenRoster(slug, name, selected, tab)}
+        />
+      ) : (
+        <LeadersPage
+          conference={selected}
+          onOpenRoster={(slug, name) => onOpenRoster(slug, name, selected, tab)}
+        />
+      )}
+    </main>
   );
 }
 
@@ -184,32 +327,24 @@ type StandingSortKey =
   | "goal_differential";
 
 function StandingsPage({
-  initialConference,
+  conference,
   onOpenRoster,
 }: {
-  initialConference: string;
-  onOpenRoster: (slug: string, name: string, fromConference: string) => void;
+  conference: string;
+  onOpenRoster: (slug: string, name: string) => void;
 }) {
-  const [conferences, setConferences] = useState<string[]>([]);
-  const [selected, setSelected] = useState<string>(initialConference); // "" = all
   const [standings, setStandings] = useState<Standing[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sort, toggleSort] = useSortSpec<StandingSortKey>();
   const [query, setQuery] = useState<string>("");
 
   useEffect(() => {
-    invoke<string[]>("list_conferences")
-      .then(setConferences)
-      .catch((e) => setError(String(e)));
-  }, []);
-
-  useEffect(() => {
     setStandings(null);
     setError(null);
-    invoke<Standing[]>("list_standings", { conference: selected || null })
+    invoke<Standing[]>("list_standings", { conference: conference || null })
       .then(setStandings)
       .catch((e) => setError(String(e)));
-  }, [selected]);
+  }, [conference]);
 
   const sortedRows = useMemo(() => {
     if (!standings) return standings;
@@ -234,32 +369,16 @@ function StandingsPage({
   }, [standings, sort, query]);
 
   return (
-    <main className="container">
-      <header className="page-header">
-        <h1>Standings</h1>
-        <div className="filter-group">
-          <label className="filter">
-            <input
-              className="search"
-              type="search"
-              placeholder="Search teams…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </label>
-          <label className="filter">
-            Conference:{" "}
-            <select value={selected} onChange={(e) => setSelected(e.target.value)}>
-              <option value="">All ({conferences.length})</option>
-              {conferences.map((c) => (
-                <option key={c} value={c}>
-                  {labelFor(c)}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </header>
+    <>
+      <div className="toolbar">
+        <input
+          className="search"
+          type="search"
+          placeholder="Search teams…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
       {error && (
         <p className="error" role="alert">
           Error: {error}
@@ -335,11 +454,7 @@ function StandingsPage({
                   <button
                     className="linklike"
                     onClick={() =>
-                      onOpenRoster(
-                        s.program_slug,
-                        s.program_name || s.program_slug,
-                        selected
-                      )
+                      onOpenRoster(s.program_slug, s.program_name || s.program_slug)
                     }
                     title={`Roster for ${s.program_name || s.program_slug}`}
                   >
@@ -358,7 +473,144 @@ function StandingsPage({
           </tbody>
         </table>
       )}
-    </main>
+    </>
+  );
+}
+
+// ---- leaders ------------------------------------------------------------
+
+type LeaderCategory =
+  | "goals"
+  | "assists"
+  | "points"
+  | "minutes"
+  | "games_played"
+  | "games_started";
+
+type LeaderRow = {
+  program_slug: string;
+  program_name: string;
+  conference: string;
+  name: string;
+  jersey_number: string;
+  games_played: number;
+  games_started: number;
+  minutes: number;
+  goals: number;
+  assists: number;
+};
+
+const LEADER_CATEGORIES: { key: LeaderCategory; label: string }[] = [
+  { key: "goals", label: "Goals" },
+  { key: "assists", label: "Assists" },
+  { key: "points", label: "Points (G×2 + A)" },
+  { key: "minutes", label: "Minutes" },
+  { key: "games_played", label: "Games Played" },
+  { key: "games_started", label: "Games Started" },
+];
+
+function pickValue(row: LeaderRow, cat: LeaderCategory): number {
+  switch (cat) {
+    case "goals":
+      return row.goals;
+    case "assists":
+      return row.assists;
+    case "points":
+      return row.goals * 2 + row.assists;
+    case "minutes":
+      return row.minutes;
+    case "games_played":
+      return row.games_played;
+    case "games_started":
+      return row.games_started;
+  }
+}
+
+function LeadersPage({
+  conference,
+  onOpenRoster,
+}: {
+  conference: string;
+  onOpenRoster: (slug: string, name: string) => void;
+}) {
+  const [category, setCategory] = useState<LeaderCategory>("goals");
+  const [rows, setRows] = useState<LeaderRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRows(null);
+    setError(null);
+    invoke<LeaderRow[]>("list_leaders", {
+      category,
+      conference: conference || null,
+      limit: 25,
+    })
+      .then(setRows)
+      .catch((e) => setError(String(e)));
+  }, [category, conference]);
+
+  return (
+    <>
+      <div className="toolbar">
+        <label className="filter">
+          Category:{" "}
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value as LeaderCategory)}
+          >
+            {LEADER_CATEGORIES.map((c) => (
+              <option key={c.key} value={c.key}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {error && (
+        <p className="error" role="alert">
+          Error: {error}
+        </p>
+      )}
+      {rows === null && !error && <p>Loading…</p>}
+      {rows !== null && rows.length === 0 && !error && (
+        <p>No stats available for this selection.</p>
+      )}
+      {rows !== null && rows.length > 0 && (
+        <table className="leaders">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Player</th>
+              <th>Team</th>
+              <th>Conf</th>
+              <th className="right">
+                {LEADER_CATEGORIES.find((c) => c.key === category)?.label}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={`${r.program_slug}-${r.jersey_number}-${r.name}`}>
+                <td>{i + 1}</td>
+                <td>
+                  #{r.jersey_number} {r.name}
+                </td>
+                <td>
+                  <button
+                    className="linklike"
+                    onClick={() => onOpenRoster(r.program_slug, r.program_name || r.program_slug)}
+                  >
+                    {r.program_name || r.program_slug}
+                  </button>
+                </td>
+                <td title={fullNameFor(r.conference)}>{labelFor(r.conference)}</td>
+                <td className="right">{pickValue(r, category)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
   );
 }
 
@@ -385,11 +637,13 @@ function RosterPage({
   slug,
   name,
   fromConference,
+  fromTab,
   onBack,
 }: {
   slug: string;
   name: string;
   fromConference: string;
+  fromTab: Tab;
   onBack: () => void;
 }) {
   const [players, setPlayers] = useState<RosterEntry[] | null>(null);
@@ -432,7 +686,8 @@ function RosterPage({
       <header className="page-header">
         <div>
           <button className="linklike" onClick={onBack}>
-            ← {fromConference ? `${labelFor(fromConference)} Standings` : "Standings"}
+            ← {fromConference ? `${labelFor(fromConference)} ` : ""}
+            {fromTab === "leaders" ? "Leaders" : "Standings"}
           </button>
           <h1>{displayName}</h1>
           <p className="subtitle">
@@ -446,6 +701,20 @@ function RosterPage({
               !hasStats &&
               sortedRows.length > 0 &&
               " · stats unavailable for this program"}
+            {players?.[0]?.roster_url && (
+              <>
+                {" · "}
+                <a
+                  className="external-link"
+                  href={players[0].roster_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open the program's official athletics page"
+                >
+                  Official site ↗
+                </a>
+              </>
+            )}
           </p>
         </div>
       </header>

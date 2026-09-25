@@ -16,6 +16,8 @@ pub struct Player {
     pub program_name: String,
     #[serde(default)]
     pub conference: String,
+    #[serde(default)]
+    pub roster_url: String,
     pub cms: String,
     pub name: String,
     pub jersey_number: String,

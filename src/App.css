@@ -4,14 +4,88 @@
   line-height: 24px;
   font-weight: 400;
 
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+  color-scheme: light;
+
+  --bg: #f6f6f6;
+  --text: #0f0f0f;
+  --text-muted: #666;
+  --border: #e4e4e4;
+  --input-bg: #fff;
+  --input-border: #ccc;
+  --input-text: #0f0f0f;
+  --header-bg: #f0f0f0;
+  --header-hover: #e6e6e6;
+  --stripe: #fafafa;
+  --hover: #eef2fb;
+  --link: #396cd8;
+  --link-hover: #24c8db;
+  --sort-arrow-muted: #c8c8c8;
+  --heading: #333;
+  --error-bg: #fee;
+  --error-text: #b71c1c;
+  --error-border: #f6b5b5;
+
+  color: var(--text);
+  background-color: var(--bg);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
+}
+
+/* Dark palette — applied when the user explicitly picks dark OR when
+   the OS prefers dark and the user hasn't overridden to light. */
+:root[data-theme="dark"],
+:root:not([data-theme="light"]):is([data-theme="dark"], [data-theme=""]) {
+  /* placeholder; real switch happens via media query + explicit selector below */
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1c1c1c;
+  --text: #f6f6f6;
+  --text-muted: #bbb;
+  --border: #333;
+  --input-bg: #2a2a2a;
+  --input-border: #555;
+  --input-text: #f6f6f6;
+  --header-bg: #2a2a2a;
+  --header-hover: #333;
+  --stripe: #232323;
+  --hover: #2f3444;
+  --link: #7ea6ff;
+  --link-hover: #24c8db;
+  --sort-arrow-muted: #555;
+  --heading: #eee;
+  --error-bg: #3b1a1a;
+  --error-text: #ffdada;
+  --error-border: #6b2323;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #1c1c1c;
+    --text: #f6f6f6;
+    --text-muted: #bbb;
+    --border: #333;
+    --input-bg: #2a2a2a;
+    --input-border: #555;
+    --input-text: #f6f6f6;
+    --header-bg: #2a2a2a;
+    --header-hover: #333;
+    --stripe: #232323;
+    --hover: #2f3444;
+    --link: #7ea6ff;
+    --link-hover: #24c8db;
+    --sort-arrow-muted: #555;
+    --heading: #eee;
+    --error-bg: #3b1a1a;
+    --error-text: #ffdada;
+    --error-border: #6b2323;
+  }
 }
 
 .container {
@@ -36,13 +110,13 @@
 
 .subtitle {
   margin: 0;
-  color: #666;
+  color: var(--text-muted);
   font-size: 0.9rem;
 }
 
 .filter {
   font-size: 0.9rem;
-  color: #555;
+  color: var(--text-muted);
 }
 
 .filter-group {
@@ -51,29 +125,60 @@
   gap: 12px;
 }
 
+.tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.tab {
+  background: transparent;
+  border: none;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab-active {
+  color: var(--link);
+  border-bottom-color: var(--link);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 16px;
+}
+
+.filter select,
 .search {
+  margin-left: 4px;
   padding: 4px 10px;
   font-size: 0.9rem;
   font-family: inherit;
   border-radius: 4px;
-  border: 1px solid #ccc;
-  background: #fff;
-  min-width: 180px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--input-text);
 }
 
-.filter select {
-  margin-left: 4px;
-  padding: 4px 8px;
-  font-size: 0.9rem;
-  font-family: inherit;
-  border-radius: 4px;
-  border: 1px solid #ccc;
-  background: #fff;
+.search {
+  min-width: 180px;
+  margin-left: 0;
 }
 
 table.standings,
 table.roster,
-table.schedule {
+table.schedule,
+table.leaders {
   width: 100%;
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
@@ -84,46 +189,43 @@ table.standings td,
 table.roster th,
 table.roster td,
 table.schedule th,
-table.schedule td {
+table.schedule td,
+table.leaders th,
+table.leaders td {
   padding: 6px 10px;
   text-align: left;
-  border-bottom: 1px solid #e4e4e4;
+  border-bottom: 1px solid var(--border);
+}
+
+table.standings th,
+table.roster th,
+table.schedule th,
+table.leaders th {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+  background: var(--header-bg);
+  user-select: none;
+  text-align: left;
 }
 
 .section-heading {
   margin: 24px 0 8px;
   font-size: 1.25rem;
-  color: #333;
-}
-
-table.schedule th {
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  color: #666;
-  letter-spacing: 0.03em;
-  background: #f0f0f0;
-  text-align: left;
-}
-
-table.standings th,
-table.roster th {
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  color: #666;
-  letter-spacing: 0.03em;
-  background: #f0f0f0;
-  user-select: none;
-  text-align: left;
+  color: var(--heading);
 }
 
 table.standings th.sortable,
-table.roster th.sortable {
+table.roster th.sortable,
+table.leaders th.sortable {
   cursor: pointer;
 }
 
 table.standings th.sortable:hover,
-table.roster th.sortable:hover {
-  background: #e6e6e6;
+table.roster th.sortable:hover,
+table.leaders th.sortable:hover {
+  background: var(--header-hover);
 }
 
 .th-label {
@@ -135,31 +237,40 @@ table.roster th.sortable:hover {
   width: 1em;
   text-align: center;
   font-size: 0.7rem;
-  color: #396cd8;
+  color: var(--sort-arrow-muted);
   margin-left: 4px;
 }
 
+.sort-active .sort-arrow {
+  color: var(--link);
+}
+
 table.standings td.right,
-table.roster td.right {
+table.roster td.right,
+table.leaders td.right,
+table.leaders th.right {
   text-align: right;
 }
 
 table.standings tbody tr:nth-child(even),
 table.roster tbody tr:nth-child(even),
-table.schedule tbody tr:nth-child(even) {
-  background: #fafafa;
+table.schedule tbody tr:nth-child(even),
+table.leaders tbody tr:nth-child(even) {
+  background: var(--stripe);
 }
 
 table.standings tbody tr:hover,
 table.roster tbody tr:hover,
-table.schedule tbody tr:hover {
-  background: #eef2fb;
+table.schedule tbody tr:hover,
+table.leaders tbody tr:hover {
+  background: var(--hover);
 }
 
-button.linklike {
+button.linklike,
+a.external-link {
   background: none;
   border: none;
-  color: #396cd8;
+  color: var(--link);
   padding: 0;
   font-size: inherit;
   font-family: inherit;
@@ -167,81 +278,36 @@ button.linklike {
   text-decoration: none;
 }
 
-button.linklike:hover {
+button.linklike:hover,
+a.external-link:hover {
   text-decoration: underline;
-  color: #24c8db;
+  color: var(--link-hover);
 }
 
 .error {
-  color: #b71c1c;
-  background: #fee;
-  border: 1px solid #f6b5b5;
+  color: var(--error-text);
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
   padding: 10px 14px;
   border-radius: 6px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #1c1c1c;
-  }
+.theme-toggle {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: 20px;
+  font-family: inherit;
+}
 
-  .subtitle,
-  .filter,
-  table.standings th,
-  table.roster th {
-    color: #bbb;
-  }
-
-  .filter select,
-  .search {
-    background: #2a2a2a;
-    border-color: #555;
-    color: #f6f6f6;
-  }
-
-  table.standings th,
-  table.roster th,
-  table.schedule th {
-    background: #2a2a2a;
-  }
-
-  table.standings th,
-  table.standings td,
-  table.roster th,
-  table.roster td,
-  table.schedule th,
-  table.schedule td {
-    border-bottom-color: #333;
-  }
-
-  table.standings tbody tr:nth-child(even),
-  table.roster tbody tr:nth-child(even),
-  table.schedule tbody tr:nth-child(even) {
-    background: #232323;
-  }
-
-  table.standings tbody tr:hover,
-  table.roster tbody tr:hover,
-  table.schedule tbody tr:hover {
-    background: #2f3444;
-  }
-
-  .section-heading {
-    color: #eee;
-  }
-
-  button.linklike {
-    color: #7ea6ff;
-  }
-
-  button.linklike:hover {
-    color: #24c8db;
-  }
-
-  .error {
-    color: #ffdada;
-    background: #3b1a1a;
-    border-color: #6b2323;
-  }
+.theme-toggle:hover {
+  background: var(--header-hover);
 }
