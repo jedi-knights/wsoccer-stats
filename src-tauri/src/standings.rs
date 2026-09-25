@@ -14,6 +14,7 @@ use crate::data::Game;
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Standing {
     pub program_slug: String,
+    pub program_name: String,
     pub conference: String,
     pub wins: u32,
     pub losses: u32,
@@ -39,6 +40,7 @@ pub fn compute_standings(games: &[Game]) -> Vec<Standing> {
             .entry(game.program_slug.clone())
             .or_insert_with(|| Standing {
                 program_slug: game.program_slug.clone(),
+                program_name: game.program_name.clone(),
                 conference: game.conference.clone(),
                 ..Standing::default()
             });
@@ -72,6 +74,7 @@ mod tests {
     fn played(program: &str, outcome: &str, team: u32, opp: u32) -> Game {
         Game {
             program_slug: program.into(),
+            program_name: program.into(),
             conference: "acc".into(),
             cms: "sidearm".into(),
             date: "2026-08-12".into(),
@@ -88,6 +91,7 @@ mod tests {
     fn future(program: &str) -> Game {
         Game {
             program_slug: program.into(),
+            program_name: program.into(),
             conference: "acc".into(),
             cms: "sidearm".into(),
             date: "2026-10-01".into(),

@@ -20,6 +20,10 @@ pub struct GameResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Game {
     pub program_slug: String,
+    /// Display name for the program (e.g. "North Carolina"). Empty string
+    /// when the producer omitted the field.
+    #[serde(default)]
+    pub program_name: String,
     /// Conference slug (e.g. "acc", "sec"). Empty string when the producer
     /// omitted the field — accept older NDJSON without failing to load.
     #[serde(default)]

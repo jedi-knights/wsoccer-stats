@@ -13,6 +13,8 @@ use std::path::Path;
 pub struct Player {
     pub program_slug: String,
     #[serde(default)]
+    pub program_name: String,
+    #[serde(default)]
     pub conference: String,
     pub cms: String,
     pub name: String,

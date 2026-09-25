@@ -78,10 +78,36 @@ table.roster th {
   color: #666;
   letter-spacing: 0.03em;
   background: #f0f0f0;
+  user-select: none;
 }
 
-table.standings td:not(:first-child):not(:nth-child(2)),
-table.roster td:first-child {
+table.standings th.sortable,
+table.roster th.sortable {
+  cursor: pointer;
+}
+
+table.standings th.sortable:hover,
+table.roster th.sortable:hover {
+  background: #e6e6e6;
+}
+
+.th-label {
+  vertical-align: middle;
+}
+
+.sort-arrow {
+  display: inline-block;
+  width: 1em;
+  text-align: center;
+  font-size: 0.7rem;
+  color: #396cd8;
+  margin-left: 4px;
+}
+
+table.standings th.right,
+table.standings td.right,
+table.roster th.right,
+table.roster td.right {
   text-align: right;
 }
 
