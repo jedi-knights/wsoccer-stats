@@ -661,6 +661,12 @@ fn list_head_to_head(conference: String) -> Result<Vec<H2HGame>, String> {
 #[derive(Debug, Clone, Serialize)]
 pub struct ConferenceSummary {
     pub conference: String,
+    /// Short display label from the registry ("ACC", "SEC", "MAC",
+    /// "MAAC", …). Included here so the Conferences tab can render
+    /// correct acronyms on first paint without waiting for the
+    /// separate list_conferences fetch to populate a label map.
+    pub label: String,
+    pub full_name: String,
     /// How many programs the registry lists in this conference.
     pub team_count: usize,
     /// How many of those teams have any played games (are RPI-ranked).
@@ -705,6 +711,7 @@ fn list_conference_summary() -> Result<Vec<ConferenceSummary>, String> {
         }
     }
 
+    let labels = load_conference_labels();
     let mut rows: Vec<ConferenceSummary> = by_conf
         .into_iter()
         .map(|(conference, (team_count, ranks))| {
@@ -714,8 +721,15 @@ fn list_conference_summary() -> Result<Vec<ConferenceSummary>, String> {
             } else {
                 Some(ranks.iter().map(|r| *r as f64).sum::<f64>() / ranks.len() as f64)
             };
+            let (label, full_name) = labels
+                .get(&conference)
+                .cloned()
+                .unwrap_or_else(|| (conference.clone(), String::new()));
+            let label = if label.is_empty() { conference.clone() } else { label };
             ConferenceSummary {
                 conference,
+                label,
+                full_name,
                 team_count,
                 ranked_count,
                 avg_rpi_rank,

@@ -97,6 +97,8 @@ type Tab = "conferences" | "standings" | "leaders";
 
 type ConferenceSummary = {
   conference: string;
+  label: string;
+  full_name: string;
   team_count: number;
   ranked_count: number;
   avg_rpi_rank: number | null;
@@ -630,7 +632,19 @@ function ConferencesPage({
 
   useEffect(() => {
     invoke<ConferenceSummary[]>("list_conference_summary")
-      .then(setRows)
+      .then((entries) => {
+        // Seed the module-level label map from this response too so any
+        // sibling component that renders BEFORE list_conferences resolves
+        // still gets correct acronyms.
+        setConferenceLabels(
+          entries.map((e) => ({
+            slug: e.conference,
+            label: e.label,
+            full_name: e.full_name,
+          })),
+        );
+        setRows(entries);
+      })
       .catch((e) => setError(String(e)));
   }, []);
 
@@ -639,7 +653,7 @@ function ConferencesPage({
     return applySort(rows, sort, (row, key) => {
       switch (key) {
         case "conference":
-          return labelFor(row.conference);
+          return row.label;
         case "avg_rpi_rank":
           // Unranked conferences sort last regardless of direction.
           if (row.avg_rpi_rank === null) {
@@ -693,9 +707,9 @@ function ConferencesPage({
               <button
                 className="linklike"
                 onClick={() => onOpenConference(r.conference)}
-                title={`Open ${labelFor(r.conference)} standings`}
+                title={`Open ${r.full_name || r.label} standings`}
               >
-                {labelFor(r.conference)}
+                {r.label}
               </button>
             </td>
             <td>{r.team_count}</td>
