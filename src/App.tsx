@@ -567,6 +567,7 @@ function BrowsePage({
         <StandingsPage
           conference={selected}
           onOpenRoster={(slug, name) => onOpenRoster(slug, name, selected, tab)}
+          onSelectConference={setSelected}
         />
       ) : (
         <LeadersPage
@@ -704,9 +705,11 @@ const STANDINGS_MODES: { key: StandingsMode; label: string }[] = [
 function StandingsPage({
   conference,
   onOpenRoster,
+  onSelectConference,
 }: {
   conference: string;
   onOpenRoster: (slug: string, name: string) => void;
+  onSelectConference: (conference: string) => void;
 }) {
   const [standings, setStandings] = useState<Standing[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -861,7 +864,15 @@ function StandingsPage({
                     {s.program_name || s.program_slug}
                   </button>
                 </td>
-                <td title={fullNameFor(s.conference)}>{labelFor(s.conference)}</td>
+                <td>
+                  <button
+                    className="linklike"
+                    onClick={() => onSelectConference(s.conference)}
+                    title={`Filter to ${fullNameFor(s.conference)}`}
+                  >
+                    {labelFor(s.conference)}
+                  </button>
+                </td>
                 <td title="RPI rank across every loaded program (1 = best)">
                   {s.rpi_rank === 0 ? "—" : s.rpi_rank}
                 </td>
