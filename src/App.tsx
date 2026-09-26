@@ -804,9 +804,11 @@ function ChartFrame({
 function GoalsScatter({
   rows,
   onOpenRoster,
+  selectedSlugs,
 }: {
   rows: Standing[];
   onOpenRoster: (slug: string, name: string) => void;
+  selectedSlugs: Set<string>;
 }) {
   // Skip stubs and unplayed teams — they'd all cluster at the origin.
   const points = rows.filter(
@@ -917,11 +919,17 @@ function GoalsScatter({
           Goals Against
         </text>
 
-        {/* Team dots. Radius shrinks when the point cloud is dense so a
-            300-dot "All" view stays readable. */}
+        {/* Team dots. Radius shrinks when the point cloud is dense so
+            a 300-dot "All" view stays readable. Starred teams draw on
+            top (rendered last) with a bigger radius, a dark ring, and
+            an inline label — the whole point of starring is that these
+            dots stand out when the chart is shared. */}
         {(() => {
-          const r = points.length > 100 ? 3 : points.length > 40 ? 4 : 5;
-          return points.map((p) => {
+          const baseR = points.length > 100 ? 3 : points.length > 40 ? 4 : 5;
+          const selR = baseR + 4;
+          const unstarred = points.filter((p) => !selectedSlugs.has(p.program_slug));
+          const starred = points.filter((p) => selectedSlugs.has(p.program_slug));
+          const dotFor = (p: Standing, selected: boolean) => {
             const gd = p.goals_for - p.goals_against;
             const fill =
               gd > 0
@@ -929,25 +937,49 @@ function GoalsScatter({
                 : gd < 0
                   ? "var(--form-loss)"
                   : "var(--form-tie)";
+            const cx = xFor(p.goals_for);
+            const cy = yFor(p.goals_against);
+            const r = selected ? selR : baseR;
             return (
-              <circle
-                key={p.program_slug}
-                cx={xFor(p.goals_for)}
-                cy={yFor(p.goals_against)}
-                r={r}
-                fill={fill}
-                opacity={0.85}
-                style={{ cursor: "pointer" }}
-                onClick={() =>
-                  onOpenRoster(p.program_slug, p.program_name || p.program_slug)
-                }
-              >
-                <title>
-                  {`${p.program_name || p.program_slug} · GF ${p.goals_for} · GA ${p.goals_against} · GD ${gd >= 0 ? "+" : ""}${gd}`}
-                </title>
-              </circle>
+              <g key={p.program_slug}>
+                <circle
+                  cx={cx}
+                  cy={cy}
+                  r={r}
+                  fill={fill}
+                  opacity={selected ? 1 : 0.85}
+                  stroke={selected ? "var(--text)" : "none"}
+                  strokeWidth={selected ? 2 : 0}
+                  style={{ cursor: "pointer" }}
+                  onClick={() =>
+                    onOpenRoster(p.program_slug, p.program_name || p.program_slug)
+                  }
+                >
+                  <title>
+                    {`${p.program_name || p.program_slug} · GF ${p.goals_for} · GA ${p.goals_against} · GD ${gd >= 0 ? "+" : ""}${gd}`}
+                  </title>
+                </circle>
+                {selected && (
+                  <text
+                    x={cx + r + 4}
+                    y={cy + 4}
+                    fontSize={12}
+                    fontWeight={600}
+                    fill="var(--text)"
+                    style={{ pointerEvents: "none" }}
+                  >
+                    {p.program_name || p.program_slug}
+                  </text>
+                )}
+              </g>
             );
-          });
+          };
+          return (
+            <>
+              {unstarred.map((p) => dotFor(p, false))}
+              {starred.map((p) => dotFor(p, true))}
+            </>
+          );
         })()}
       </svg>
     </ChartFrame>
@@ -964,9 +996,11 @@ function GoalsScatter({
 function SosScatter({
   rows,
   onOpenRoster,
+  selectedSlugs,
 }: {
   rows: Standing[];
   onOpenRoster: (slug: string, name: string) => void;
+  selectedSlugs: Set<string>;
 }) {
   const points = rows.filter(
     (r) => r.has_schedule_data && r.games_played > 0 && r.rpi > 0,
@@ -1093,25 +1127,54 @@ function SosScatter({
         </text>
 
         {(() => {
-          const r = points.length > 100 ? 3 : points.length > 40 ? 4 : 5;
-          return points.map((p) => (
-            <circle
-              key={p.program_slug}
-              cx={xFor(p.sos)}
-              cy={yFor(p.rpi)}
-              r={r}
-              fill="var(--link)"
-              opacity={0.75}
-              style={{ cursor: "pointer" }}
-              onClick={() =>
-                onOpenRoster(p.program_slug, p.program_name || p.program_slug)
-              }
-            >
-              <title>
-                {`${p.program_name || p.program_slug} · RPI ${p.rpi.toFixed(3)} · SoS ${p.sos.toFixed(3)} · rank ${p.rpi_rank || "—"}`}
-              </title>
-            </circle>
-          ));
+          const baseR = points.length > 100 ? 3 : points.length > 40 ? 4 : 5;
+          const selR = baseR + 4;
+          const unstarred = points.filter((p) => !selectedSlugs.has(p.program_slug));
+          const starred = points.filter((p) => selectedSlugs.has(p.program_slug));
+          const dotFor = (p: Standing, selected: boolean) => {
+            const cx = xFor(p.sos);
+            const cy = yFor(p.rpi);
+            const r = selected ? selR : baseR;
+            return (
+              <g key={p.program_slug}>
+                <circle
+                  cx={cx}
+                  cy={cy}
+                  r={r}
+                  fill="var(--link)"
+                  opacity={selected ? 1 : 0.75}
+                  stroke={selected ? "var(--text)" : "none"}
+                  strokeWidth={selected ? 2 : 0}
+                  style={{ cursor: "pointer" }}
+                  onClick={() =>
+                    onOpenRoster(p.program_slug, p.program_name || p.program_slug)
+                  }
+                >
+                  <title>
+                    {`${p.program_name || p.program_slug} · RPI ${p.rpi.toFixed(3)} · SoS ${p.sos.toFixed(3)} · rank ${p.rpi_rank || "—"}`}
+                  </title>
+                </circle>
+                {selected && (
+                  <text
+                    x={cx + r + 4}
+                    y={cy + 4}
+                    fontSize={12}
+                    fontWeight={600}
+                    fill="var(--text)"
+                    style={{ pointerEvents: "none" }}
+                  >
+                    {p.program_name || p.program_slug}
+                  </text>
+                )}
+              </g>
+            );
+          };
+          return (
+            <>
+              {unstarred.map((p) => dotFor(p, false))}
+              {starred.map((p) => dotFor(p, true))}
+            </>
+          );
         })()}
       </svg>
     </ChartFrame>
@@ -1251,6 +1314,22 @@ function StandingsPage({
   const [sort, toggleSort] = useSortSpec<StandingSortKey>();
   const [query, setQuery] = useState<string>("");
   const [mode, setMode] = useState<StandingsMode>("conference");
+  // Teams the user has "starred" in the standings — their dots on the
+  // scatters render larger, ringed, and labelled so the current view
+  // can be shared with a specific team called out. Reset on conference
+  // change so switching conferences starts with a clean selection.
+  const [selectedSlugs, setSelectedSlugs] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setSelectedSlugs(new Set());
+  }, [conference]);
+  const toggleSelected = useCallback((slug: string) => {
+    setSelectedSlugs((prev) => {
+      const next = new Set(prev);
+      if (next.has(slug)) next.delete(slug);
+      else next.add(slug);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     setStandings(null);
@@ -1329,6 +1408,13 @@ function StandingsPage({
         <table className="standings">
           <thead>
             <tr>
+              <th
+                className="star-col"
+                title="Star a team to highlight it on the charts"
+                aria-label="Highlight column"
+              >
+                ★
+              </th>
               <SortHeader
                 label="Program"
                 sortKey="program_name"
@@ -1394,8 +1480,33 @@ function StandingsPage({
               // can still navigate.
               const dash = "—";
               const dashOr = <T,>(v: T) => (s.has_schedule_data ? String(v) : dash);
+              const isSelected = selectedSlugs.has(s.program_slug);
+              // Stub rows have no data point on the scatters, so
+              // starring them is meaningless — disable that column.
+              const canStar = s.has_schedule_data && s.games_played > 0;
               return (
-                <tr key={s.program_slug}>
+                <tr
+                  key={s.program_slug}
+                  className={isSelected ? "row-selected" : undefined}
+                >
+                  <td className="star-col">
+                    <button
+                      className={`star-btn${isSelected ? " star-btn-on" : ""}`}
+                      onClick={() => toggleSelected(s.program_slug)}
+                      disabled={!canStar}
+                      title={
+                        !canStar
+                          ? "No played games to highlight"
+                          : isSelected
+                            ? "Un-highlight on charts"
+                            : "Highlight on charts"
+                      }
+                      aria-pressed={isSelected}
+                      aria-label={`${isSelected ? "Un-star" : "Star"} ${s.program_name || s.program_slug}`}
+                    >
+                      {isSelected ? "★" : "☆"}
+                    </button>
+                  </td>
                   <td>
                     <button
                       className="linklike"
@@ -1441,8 +1552,16 @@ function StandingsPage({
       )}
       {sortedRows !== null && sortedRows.length > 0 && (
         <div className="standings-charts">
-          <GoalsScatter rows={sortedRows} onOpenRoster={onOpenRoster} />
-          <SosScatter rows={sortedRows} onOpenRoster={onOpenRoster} />
+          <GoalsScatter
+            rows={sortedRows}
+            onOpenRoster={onOpenRoster}
+            selectedSlugs={selectedSlugs}
+          />
+          <SosScatter
+            rows={sortedRows}
+            onOpenRoster={onOpenRoster}
+            selectedSlugs={selectedSlugs}
+          />
           <HeadToHeadMatrix conference={conference} teams={sortedRows} />
         </div>
       )}
