@@ -15,6 +15,11 @@ type Standing = {
   games_played: number;
   points: number;
   rpi_rank: number;
+  // Classical NCAA RPI in [0, 1] and its strength-of-schedule component
+  // (opponent winning percentage with games vs this team excluded).
+  // Populated only when the team has played games.
+  rpi: number;
+  sos: number;
   // False for zero-record stubs filled from the registry to represent a
   // conference member whose schedule wasn't ingested — the numeric
   // columns for such rows render as em-dashes so users can distinguish
@@ -723,10 +728,9 @@ function GoalsScatter({
   );
   if (points.length < 2) return null;
 
-  // Fixed height, width scales with the container up to a cap. Axis
-  // maxima round up to the next multiple of 5 so tick lines land on
-  // familiar numbers.
-  const width = 720;
+  // Width scales via viewBox — the container is styled to match the
+  // standings table's width so the chart lines up visually with it.
+  const width = 960;
   const height = 320;
   const pad = { top: 16, right: 24, bottom: 40, left: 44 };
   const plotW = width - pad.left - pad.right;
@@ -744,7 +748,8 @@ function GoalsScatter({
   for (let v = 0; v <= axisMax; v += step) ticks.push(v);
 
   return (
-    <div className="goals-scatter">
+    <div className="chart-block">
+      <div className="chart-title">Goals For vs. Goals Against</div>
       <svg
         width="100%"
         viewBox={`0 0 ${width} ${height}`}
@@ -864,6 +869,171 @@ function GoalsScatter({
   );
 }
 
+/// SoS-vs-RPI scatter — one dot per played team. X = Strength of
+/// Schedule (OWP component of RPI, so higher = tougher schedule).
+/// Y = RPI (top of the plot). A dashed y = x line is a rough sanity
+/// indicator: teams sitting well ABOVE that line achieved a stronger
+/// RPI than their SoS alone would predict (dominant against weak
+/// schedules OR big wins against tough ones). Click a dot to open
+/// the roster.
+function SosScatter({
+  rows,
+  onOpenRoster,
+}: {
+  rows: Standing[];
+  onOpenRoster: (slug: string, name: string) => void;
+}) {
+  const points = rows.filter(
+    (r) => r.has_schedule_data && r.games_played > 0 && r.rpi > 0,
+  );
+  if (points.length < 2) return null;
+
+  const width = 960;
+  const height = 320;
+  const pad = { top: 16, right: 24, bottom: 40, left: 52 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+
+  // Both axes are in [0, 1]; give a bit of headroom so dots don't
+  // touch the edges. Use a shared window derived from the data.
+  const allX = points.map((p) => p.sos);
+  const allY = points.map((p) => p.rpi);
+  const minX = Math.max(0, Math.min(...allX) - 0.05);
+  const maxX = Math.min(1, Math.max(...allX) + 0.05);
+  const minY = Math.max(0, Math.min(...allY) - 0.05);
+  const maxY = Math.min(1, Math.max(...allY) + 0.05);
+
+  const xFor = (v: number) =>
+    pad.left + ((v - minX) / (maxX - minX)) * plotW;
+  const yFor = (v: number) =>
+    pad.top + (1 - (v - minY) / (maxY - minY)) * plotH;
+
+  const tickVals = (lo: number, hi: number) => {
+    const step = 0.05;
+    const first = Math.ceil(lo / step) * step;
+    const out: number[] = [];
+    for (let v = first; v <= hi + 1e-9; v += step) out.push(Math.round(v * 100) / 100);
+    return out;
+  };
+  const xTicks = tickVals(minX, maxX);
+  const yTicks = tickVals(minY, maxY);
+
+  return (
+    <div className="chart-block">
+      <div className="chart-title">Strength of Schedule vs. RPI</div>
+      <svg
+        width="100%"
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="xMidYMid meet"
+        role="img"
+        aria-label="Strength of schedule vs RPI scatter"
+      >
+        {/* y = x reference line (only visible within the shared window) */}
+        {(() => {
+          const from = Math.max(minX, minY);
+          const to = Math.min(maxX, maxY);
+          if (to <= from) return null;
+          return (
+            <line
+              x1={xFor(from)}
+              y1={yFor(from)}
+              x2={xFor(to)}
+              y2={yFor(to)}
+              stroke="var(--form-outline, #999)"
+              strokeDasharray="4 4"
+              strokeWidth={1}
+              opacity={0.5}
+            />
+          );
+        })()}
+
+        {xTicks.map((v) => (
+          <g key={`sx-${v}`}>
+            <line
+              x1={xFor(v)}
+              y1={pad.top}
+              x2={xFor(v)}
+              y2={pad.top + plotH}
+              stroke="var(--border)"
+              strokeWidth={1}
+            />
+            <text
+              x={xFor(v)}
+              y={pad.top + plotH + 16}
+              textAnchor="middle"
+              fontSize={11}
+              fill="var(--text-muted)"
+            >
+              {v.toFixed(2)}
+            </text>
+          </g>
+        ))}
+        {yTicks.map((v) => (
+          <g key={`sy-${v}`}>
+            <line
+              x1={pad.left}
+              y1={yFor(v)}
+              x2={pad.left + plotW}
+              y2={yFor(v)}
+              stroke="var(--border)"
+              strokeWidth={1}
+            />
+            <text
+              x={pad.left - 6}
+              y={yFor(v) + 4}
+              textAnchor="end"
+              fontSize={11}
+              fill="var(--text-muted)"
+            >
+              {v.toFixed(2)}
+            </text>
+          </g>
+        ))}
+
+        <text
+          x={pad.left + plotW / 2}
+          y={height - 6}
+          textAnchor="middle"
+          fontSize={12}
+          fill="var(--heading)"
+        >
+          Strength of Schedule (OWP)
+        </text>
+        <text
+          transform={`translate(14 ${pad.top + plotH / 2}) rotate(-90)`}
+          textAnchor="middle"
+          fontSize={12}
+          fill="var(--heading)"
+        >
+          RPI
+        </text>
+
+        {(() => {
+          const r = points.length > 100 ? 3 : points.length > 40 ? 4 : 5;
+          return points.map((p) => (
+            <circle
+              key={p.program_slug}
+              cx={xFor(p.sos)}
+              cy={yFor(p.rpi)}
+              r={r}
+              fill="var(--link)"
+              opacity={0.75}
+              style={{ cursor: "pointer" }}
+              onClick={() =>
+                onOpenRoster(p.program_slug, p.program_name || p.program_slug)
+              }
+            >
+              <title>
+                {`${p.program_name || p.program_slug} · RPI ${p.rpi.toFixed(3)} · SoS ${p.sos.toFixed(3)} · rank ${p.rpi_rank || "—"}`}
+              </title>
+            </circle>
+          ));
+        })()}
+      </svg>
+    </div>
+  );
+}
+
 /// Square W-L-T grid of every conference member vs every other. Cell
 /// (row, col) shows the result of row-team's game against col-team from
 /// the row team's perspective. Empty cells = teams haven't played yet;
@@ -911,8 +1081,10 @@ function HeadToHeadMatrix({
   }
 
   return (
-    <div className="h2h-wrapper">
-      <table className="h2h-matrix">
+    <div className="chart-block h2h-block">
+      <div className="chart-title">Head-to-Head</div>
+      <div className="h2h-wrapper">
+        <table className="h2h-matrix">
         <thead>
           <tr>
             <th className="h2h-corner" />
@@ -971,6 +1143,7 @@ function HeadToHeadMatrix({
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -1062,12 +1235,6 @@ function StandingsPage({
       {sortedRows === null && !error && <p>Loading…</p>}
       {sortedRows !== null && sortedRows.length === 0 && !error && (
         <p>No games found for this selection.</p>
-      )}
-      {sortedRows !== null && sortedRows.length > 0 && (
-        <GoalsScatter rows={sortedRows} onOpenRoster={onOpenRoster} />
-      )}
-      {sortedRows !== null && sortedRows.length > 0 && (
-        <HeadToHeadMatrix conference={conference} teams={sortedRows} />
       )}
       {sortedRows !== null && sortedRows.length > 0 && (
         <table className="standings">
@@ -1182,6 +1349,13 @@ function StandingsPage({
             })}
           </tbody>
         </table>
+      )}
+      {sortedRows !== null && sortedRows.length > 0 && (
+        <div className="standings-charts">
+          <GoalsScatter rows={sortedRows} onOpenRoster={onOpenRoster} />
+          <SosScatter rows={sortedRows} onOpenRoster={onOpenRoster} />
+          <HeadToHeadMatrix conference={conference} teams={sortedRows} />
+        </div>
       )}
     </>
   );
