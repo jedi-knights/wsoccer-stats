@@ -538,6 +538,119 @@ fn list_conferences() -> Result<Vec<ConferenceEntry>, String> {
     Ok(entries)
 }
 
+/// One played game between two members of the same conference, from
+/// the schedule owner's perspective. Used by the head-to-head matrix.
+#[derive(Debug, Clone, Serialize)]
+pub struct H2HGame {
+    /// Schedule owner (rows in the H2H matrix are keyed by this).
+    pub program_slug: String,
+    /// Opponent resolved via the registry / games name_to_slug lookup.
+    /// Empty when the opponent name couldn't be matched to a registry
+    /// program — such games are skipped by this endpoint, so this
+    /// field is always non-empty in the returned rows.
+    pub opponent_slug: String,
+    pub date: String,
+    pub home_away: String,
+    pub outcome: String,
+    pub team_score: u32,
+    pub opponent_score: u32,
+}
+
+/// Head-to-head games between members of one conference — one row per
+/// game per team (games appear twice, once from each team's perspective,
+/// since the frontend renders a symmetric matrix).
+///
+/// Filters out games before the conference's cluster-derived play-start
+/// date so the matrix matches what the Conference standings mode shows.
+#[tauri::command]
+fn list_head_to_head(conference: String) -> Result<Vec<H2HGame>, String> {
+    if conference.is_empty() {
+        return Err("conference is required for head-to-head".into());
+    }
+    let all_games = load_games()?;
+    let registry = load_program_registry();
+
+    // Reuse the same name-lookup shape as list_standings so classification
+    // matches exactly: seed from games first, then registry so all D1
+    // programs are addressable even if they have no schedule.
+    let mut name_to_slug: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut name_to_conf: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for g in &all_games {
+        if !g.program_name.is_empty() {
+            let k = normalize_team_name(&g.program_name);
+            name_to_slug.entry(k.clone()).or_insert_with(|| g.program_slug.clone());
+            if !g.conference.is_empty() {
+                name_to_conf.entry(k).or_insert_with(|| g.conference.clone());
+            }
+        }
+    }
+    for p in &registry {
+        let k = normalize_team_name(&p.name);
+        name_to_slug.entry(k.clone()).or_insert_with(|| p.slug.clone());
+        name_to_conf.entry(k).or_insert_with(|| p.conference.clone());
+    }
+
+    // Compute the conference-play cluster start (identical logic to
+    // list_standings) so we drop preseason rivalries between conference
+    // members from the matrix.
+    let is_same_conf = |g: &Game| -> bool {
+        name_to_conf
+            .get(&normalize_team_name(&g.opponent))
+            .is_some_and(|opp_conf| opp_conf == &g.conference)
+    };
+    const CLUSTER_THRESHOLD: usize = 3;
+    let mut same_conf_dates: Vec<String> = all_games
+        .iter()
+        .filter(|g| g.result.is_some() && g.conference == conference && is_same_conf(g))
+        .map(|g| g.date.clone())
+        .collect();
+    same_conf_dates.sort();
+    let mut conf_play_start: Option<String> = None;
+    for i in 0..same_conf_dates.len() {
+        let window_end = add_days_iso(&same_conf_dates[i], 7);
+        let n = same_conf_dates[i..]
+            .iter()
+            .take_while(|d| **d <= window_end)
+            .count();
+        if n >= CLUSTER_THRESHOLD {
+            conf_play_start = Some(same_conf_dates[i].clone());
+            break;
+        }
+    }
+
+    let mut rows: Vec<H2HGame> = Vec::new();
+    for g in &all_games {
+        if g.conference != conference {
+            continue;
+        }
+        let Some(result) = &g.result else { continue };
+        if !is_same_conf(g) {
+            continue;
+        }
+        if let Some(start) = &conf_play_start {
+            if g.date.as_str() < start.as_str() {
+                continue;
+            }
+        }
+        let opp_slug = match name_to_slug.get(&normalize_team_name(&g.opponent)) {
+            Some(s) => s.clone(),
+            None => continue,
+        };
+        rows.push(H2HGame {
+            program_slug: g.program_slug.clone(),
+            opponent_slug: opp_slug,
+            date: g.date.clone(),
+            home_away: g.home_away.clone(),
+            outcome: result.outcome.clone(),
+            team_score: result.team_score,
+            opponent_score: result.opponent_score,
+        });
+    }
+    Ok(rows)
+}
+
 /// One row in the conferences summary view.
 #[derive(Debug, Clone, Serialize)]
 pub struct ConferenceSummary {
@@ -1080,6 +1193,7 @@ pub fn run() {
             list_standings,
             list_conferences,
             list_conference_summary,
+            list_head_to_head,
             list_roster,
             list_schedule,
             list_leaders,
