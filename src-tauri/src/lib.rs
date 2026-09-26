@@ -815,18 +815,14 @@ async fn refresh_data(
             jobs.push(("stats", c.to_string()));
         }
         None => {
-            // Rosters and schedules cover EVERY D1 program — with 20
-            // workers each pass is ~30 s, and clicking on any team in
-            // any conference should show its roster. Single subprocess
-            // per kind is faster than 31 per-conference calls.
+            // Every kind covers EVERY D1 program — with 20 workers
+            // each pass runs in under a minute, and a user opening a
+            // CAA team's roster expects to see the same stats we
+            // surface for a P4/WCC team. Single subprocess per kind
+            // is faster than 31 per-conference calls.
             jobs.push(("ingest", String::new()));
             jobs.push(("schedule", String::new()));
-            // Stats limited to the P4+WCC surface the UI actually uses
-            // — stats pages are the slowest scrape (WMT API is per-
-            // player) and only the P4+WCC feeds Leaders + roster stats.
-            for c in ["acc", "sec", "big_ten", "big_12", "west_coast"] {
-                jobs.push(("stats", c.to_string()));
-            }
+            jobs.push(("stats", String::new()));
         }
     }
 
