@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::data::Game;
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Standing {
     pub program_slug: String,
     pub program_name: String,
@@ -24,6 +24,12 @@ pub struct Standing {
     pub games_played: u32,
     /// Soccer points: 3 per win, 1 per tie, 0 per loss.
     pub points: u32,
+    /// Rank of this team by RPI (1 = best) across every program loaded on
+    /// disk, not just the ones in the current filter. Ties share the same
+    /// rank (standard competition ranking — 1, 2, 2, 4).
+    /// 0 when the team has no played games we can rank.
+    #[serde(default)]
+    pub rpi_rank: u32,
 }
 
 /// Aggregate `games` into per-program standings, sorted by wins desc,
@@ -67,6 +73,188 @@ pub fn compute_standings(games: &[Game]) -> Vec<Standing> {
             .then_with(|| a.program_slug.cmp(&b.program_slug))
     });
     standings
+}
+
+/// Classical NCAA-style Rating Percentage Index for each program that has
+/// at least one played game in `all_games`.
+///
+/// `RPI = 0.25·WP + 0.50·OWP + 0.25·OOWP` where
+/// - `WP(T)` = `(wins + 0.5·ties) / gp`
+/// - `OWP(T)` = mean, over each opponent `O` of `T`, of `O`'s winning percentage
+///   **with the games between `O` and `T` removed** (so the team's own results
+///   don't inflate its opponents' rating)
+/// - `OOWP(T)` = mean, over each opponent `O` of `T`, of `O`'s standard OWP
+///
+/// Opponents whose program schedule we haven't loaded (typically non-Power-4
+/// non-WCC teams) are skipped from the averages rather than assigned a
+/// baseline. Callers should read this as "RPI relative to the loaded universe."
+///
+/// Keyed by `program_slug`.
+pub fn compute_rpi(all_games: &[Game]) -> HashMap<String, f64> {
+    #[derive(Default, Clone)]
+    struct Record {
+        w: u32,
+        l: u32,
+        t: u32,
+    }
+    impl Record {
+        fn gp(&self) -> u32 {
+            self.w + self.l + self.t
+        }
+        fn wp(&self) -> f64 {
+            let gp = self.gp();
+            if gp == 0 {
+                return 0.0;
+            }
+            (self.w as f64 + 0.5 * self.t as f64) / gp as f64
+        }
+    }
+
+    // Per-program record aggregated across every played game.
+    let mut records: HashMap<String, Record> = HashMap::new();
+    // Per-program list of (opponent_name_lower, outcome_from_our_pov).
+    // Used both to identify each program's opponent set and to strip
+    // "games against T" when computing OWP(O) from T's perspective.
+    let mut opponents: HashMap<String, Vec<(String, char)>> = HashMap::new();
+    // program_name (lowercase) → program_slug so we can look up an
+    // opponent's own record when we have it.
+    let mut name_to_slug: HashMap<String, String> = HashMap::new();
+
+    for g in all_games {
+        let Some(res) = &g.result else { continue };
+        let outcome = match res.outcome.as_str() {
+            "W" => 'W',
+            "L" => 'L',
+            "T" => 'T',
+            _ => continue,
+        };
+        let rec = records.entry(g.program_slug.clone()).or_default();
+        match outcome {
+            'W' => rec.w += 1,
+            'L' => rec.l += 1,
+            'T' => rec.t += 1,
+            _ => unreachable!(),
+        }
+        opponents
+            .entry(g.program_slug.clone())
+            .or_default()
+            .push((crate::normalize_team_name(&g.opponent), outcome));
+        if !g.program_name.is_empty() {
+            name_to_slug
+                .entry(crate::normalize_team_name(&g.program_name))
+                .or_insert_with(|| g.program_slug.clone());
+        }
+    }
+
+    // O's WP with every game against a team named `target_name_lower` removed.
+    // Returns None when O ends up with 0 games after the exclusion.
+    let wp_excluding = |o_slug: &str, target_name_lower: &str| -> Option<f64> {
+        let games = opponents.get(o_slug)?;
+        let mut w = 0u32;
+        let mut l = 0u32;
+        let mut t = 0u32;
+        for (opp_name, outcome) in games {
+            if opp_name == target_name_lower {
+                continue;
+            }
+            match outcome {
+                'W' => w += 1,
+                'L' => l += 1,
+                'T' => t += 1,
+                _ => {}
+            }
+        }
+        let gp = w + l + t;
+        if gp == 0 {
+            return None;
+        }
+        Some((w as f64 + 0.5 * t as f64) / gp as f64)
+    };
+
+    // Standard OWP(O) — mean of O's opponents' WP, each excluding games vs O.
+    // Cached because OOWP(T) queries the same OWP many times.
+    let mut owp_cache: HashMap<String, f64> = HashMap::new();
+    let mut owp_of = |o_slug: &str, o_name_lower: &str| -> f64 {
+        if let Some(&v) = owp_cache.get(o_slug) {
+            return v;
+        }
+        let Some(o_opps) = opponents.get(o_slug) else {
+            owp_cache.insert(o_slug.to_string(), 0.0);
+            return 0.0;
+        };
+        let mut sum = 0.0;
+        let mut n = 0;
+        // Deduplicate opponent identities so a team we played twice doesn't
+        // double-count in the average.
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (opp_name, _) in o_opps {
+            if !seen.insert(opp_name.as_str()) {
+                continue;
+            }
+            let Some(opp_slug) = name_to_slug.get(opp_name) else {
+                continue;
+            };
+            if let Some(wp) = wp_excluding(opp_slug, o_name_lower) {
+                sum += wp;
+                n += 1;
+            }
+        }
+        let v = if n == 0 { 0.0 } else { sum / n as f64 };
+        owp_cache.insert(o_slug.to_string(), v);
+        v
+    };
+
+    // Reverse index so we can pass each program's lowercase name to
+    // wp_excluding / owp_of without regenerating it.
+    let slug_to_name_lower: HashMap<String, String> = name_to_slug
+        .iter()
+        .map(|(name, slug)| (slug.clone(), name.clone()))
+        .collect();
+
+    let mut rpi_by_slug: HashMap<String, f64> = HashMap::new();
+    for (t_slug, t_record) in &records {
+        let wp = t_record.wp();
+        let t_name_lower = slug_to_name_lower
+            .get(t_slug)
+            .cloned()
+            .unwrap_or_default();
+
+        let Some(t_opps) = opponents.get(t_slug) else {
+            rpi_by_slug.insert(t_slug.clone(), 0.25 * wp);
+            continue;
+        };
+
+        // OWP(T): mean of each opponent's WP excluding games vs T.
+        let mut owp_sum = 0.0;
+        let mut owp_n = 0;
+        // OOWP(T): mean of each opponent's standard OWP.
+        let mut oowp_sum = 0.0;
+        let mut oowp_n = 0;
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (opp_name, _) in t_opps {
+            if !seen.insert(opp_name.as_str()) {
+                continue;
+            }
+            let Some(opp_slug) = name_to_slug.get(opp_name) else {
+                continue;
+            };
+            if let Some(w) = wp_excluding(opp_slug, &t_name_lower) {
+                owp_sum += w;
+                owp_n += 1;
+            }
+            let opp_name_lower = slug_to_name_lower
+                .get(opp_slug)
+                .cloned()
+                .unwrap_or_else(|| opp_name.clone());
+            oowp_sum += owp_of(opp_slug, &opp_name_lower);
+            oowp_n += 1;
+        }
+        let owp = if owp_n == 0 { 0.0 } else { owp_sum / owp_n as f64 };
+        let oowp = if oowp_n == 0 { 0.0 } else { oowp_sum / oowp_n as f64 };
+
+        rpi_by_slug.insert(t_slug.clone(), 0.25 * wp + 0.50 * owp + 0.25 * oowp);
+    }
+    rpi_by_slug
 }
 
 #[cfg(test)]
@@ -159,6 +347,85 @@ mod tests {
             .map(|s| s.program_slug)
             .collect();
         assert_eq!(order, vec!["avery", "duke", "unc", "wake"]);
+    }
+
+    fn game(program: &str, opponent: &str, outcome: &str, team: u32, opp: u32) -> Game {
+        Game {
+            program_slug: program.into(),
+            program_name: program.into(),
+            conference: "acc".into(),
+            cms: "sidearm".into(),
+            date: "2026-08-12".into(),
+            opponent: opponent.into(),
+            home_away: "home".into(),
+            result: Some(GameResult {
+                outcome: outcome.into(),
+                team_score: team,
+                opponent_score: opp,
+            }),
+        }
+    }
+
+    #[test]
+    fn rpi_matches_hand_computed_value() {
+        // Three teams playing each other exactly once. Every game has a
+        // known result, so RPI has a unique closed-form value for each
+        // team.
+        //
+        //   A beat B  (A: 1-0, B: 0-1)
+        //   A beat C  (A: 2-0, C: 0-1)
+        //   B beat C  (B: 1-1, C: 0-2)
+        //
+        // WP(A) = 2/2 = 1.0
+        // WP(B) = 1/2 = 0.5
+        // WP(C) = 0/2 = 0.0
+        //
+        // OWP(A) = mean of B's WP excluding vs A, C's WP excluding vs A
+        //        = mean(1/1, 0/1) = 0.5
+        // OWP(B) = mean of A's WP excluding vs B, C's WP excluding vs B
+        //        = mean(1/1, 0/1) = 0.5
+        // OWP(C) = mean of A's WP excluding vs C, B's WP excluding vs C
+        //        = mean(1/1, 0/1) = 0.5
+        //
+        // OOWP(A) = mean of OWP(B), OWP(C) = 0.5
+        // OOWP(B) = mean of OWP(A), OWP(C) = 0.5
+        // OOWP(C) = mean of OWP(A), OWP(B) = 0.5
+        //
+        // RPI(A) = 0.25*1.0 + 0.50*0.5 + 0.25*0.5 = 0.625
+        // RPI(B) = 0.25*0.5 + 0.50*0.5 + 0.25*0.5 = 0.500
+        // RPI(C) = 0.25*0.0 + 0.50*0.5 + 0.25*0.5 = 0.375
+        let games = vec![
+            game("a", "b", "W", 1, 0),
+            game("a", "c", "W", 2, 0),
+            game("b", "a", "L", 0, 1),
+            game("b", "c", "W", 1, 0),
+            game("c", "a", "L", 0, 2),
+            game("c", "b", "L", 0, 1),
+        ];
+        let rpi = compute_rpi(&games);
+        assert!((rpi["a"] - 0.625).abs() < 1e-9, "a RPI: {}", rpi["a"]);
+        assert!((rpi["b"] - 0.500).abs() < 1e-9, "b RPI: {}", rpi["b"]);
+        assert!((rpi["c"] - 0.375).abs() < 1e-9, "c RPI: {}", rpi["c"]);
+    }
+
+    #[test]
+    fn rpi_skips_unknown_opponents_from_averages() {
+        // A plays two games: beats a program we HAVE loaded (b), then beats
+        // a program we do NOT have loaded (unknown_team). Only b should
+        // contribute to A's OWP; the missing opponent is skipped rather
+        // than assigned a baseline.
+        let games = vec![
+            game("a", "b", "W", 1, 0),
+            game("a", "unknown_team", "W", 3, 0),
+            game("b", "a", "L", 0, 1),
+        ];
+        let rpi = compute_rpi(&games);
+        // WP(A) = 2/2 = 1.0
+        // OWP(A) uses only b (WP excl A = 0/1 = 0.0) → 0.0
+        // OOWP(A) uses only b's OWP: b's opponents = {a}, wp_excl_b(a) = 1/1
+        //   → OWP(b) = 1.0 → OOWP(A) = 1.0
+        // RPI(A) = 0.25*1.0 + 0.5*0.0 + 0.25*1.0 = 0.5
+        assert!((rpi["a"] - 0.5).abs() < 1e-9, "a RPI: {}", rpi["a"]);
     }
 
     #[test]

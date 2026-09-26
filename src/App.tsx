@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import html2canvas from "html2canvas";
 import "./App.css";
 
@@ -14,6 +14,7 @@ type Standing = {
   goals_against: number;
   games_played: number;
   points: number;
+  rpi_rank: number;
 };
 
 type GameResult = {
@@ -53,7 +54,26 @@ type RosterEntry = {
   assists: number | null;
 };
 
-type Tab = "standings" | "leaders";
+type RefreshResult = {
+  kind: string;
+  conference: string;
+  ok: boolean;
+  summary: string;
+};
+
+type RefreshEvent =
+  | { phase: "started"; total: number }
+  | { phase: "step"; index: number; total: number; result: RefreshResult }
+  | { phase: "finished"; ok: number; total: number };
+
+type Tab = "conferences" | "standings" | "leaders";
+
+type ConferenceSummary = {
+  conference: string;
+  team_count: number;
+  ranked_count: number;
+  avg_rpi_rank: number | null;
+};
 
 type View =
   | { kind: "standings"; conference: string; tab: Tab }
@@ -65,6 +85,33 @@ const CONFERENCE_LABELS: Record<string, string> = {
   big_ten: "Big Ten",
   big_12: "Big 12",
   west_coast: "WCC",
+  // Acronym-heavy conferences that don't title-case cleanly from the slug.
+  asun: "ASUN",
+  american_athletic: "AAC",
+  conference_usa: "C-USA",
+  maac: "MAAC",
+  mac: "MAC",
+  swac: "SWAC",
+  wac: "WAC",
+  pac_12: "Pac-12",
+  mountain_west: "Mountain West",
+  missouri_valley: "MVC",
+  atlantic_10: "A-10",
+  coastal_athletic: "CAA",
+  ohio_valley: "OVC",
+  summit_league: "Summit",
+  northeast: "NEC",
+  big_south: "Big South",
+  big_east: "Big East",
+  big_sky: "Big Sky",
+  big_west: "Big West",
+  sun_belt: "Sun Belt",
+  patriot_league: "Patriot",
+  ivy_league: "Ivy",
+  horizon_league: "Horizon",
+  america_east: "America East",
+  southern: "SoCon",
+  southland: "Southland",
 };
 
 const CONFERENCE_FULL_NAMES: Record<string, string> = {
@@ -76,7 +123,13 @@ const CONFERENCE_FULL_NAMES: Record<string, string> = {
 };
 
 function labelFor(conf: string): string {
-  return CONFERENCE_LABELS[conf] ?? conf;
+  if (conf in CONFERENCE_LABELS) return CONFERENCE_LABELS[conf];
+  // Title-case the slug for conferences without an explicit label:
+  // `atlantic_10` → `Atlantic 10`, `big_east` → `Big East`.
+  return conf
+    .split("_")
+    .map((w) => (w.length === 0 ? w : w[0].toUpperCase() + w.slice(1)))
+    .join(" ");
 }
 
 function fullNameFor(conf: string): string {
@@ -220,6 +273,28 @@ function ScreenshotButton({ onDone }: { onDone: (status: string) => void }) {
   );
 }
 
+function RefreshButton({
+  busy,
+  onClick,
+}: {
+  busy: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="refresh-btn"
+      disabled={busy}
+      onClick={onClick}
+      title="Refresh from live sites"
+      aria-label="Refresh data from live sites"
+    >
+      <span className={busy ? "refresh-icon spinning" : "refresh-icon"}>
+        {busy ? "⏳" : "🔄"}
+      </span>
+    </button>
+  );
+}
+
 function ThemeToggle({
   theme,
   onToggle,
@@ -286,14 +361,89 @@ function App() {
   const [view, setView] = useState<View>({
     kind: "standings",
     conference: "",
-    tab: "standings",
+    tab: "conferences",
   });
+  const [dataRevision, setDataRevision] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [progress, setProgress] = useState<{
+    done: number;
+    total: number;
+    label: string;
+  } | null>(null);
+  const refresh = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setProgress({ done: 0, total: 0, label: "Starting…" });
+    try {
+      const channel = new Channel<RefreshEvent>();
+      channel.onmessage = (msg) => {
+        if (msg.phase === "started") {
+          setProgress({ done: 0, total: msg.total, label: "Starting…" });
+        } else if (msg.phase === "step") {
+          setProgress({
+            done: msg.index,
+            total: msg.total,
+            label: `${msg.result.conference} · ${msg.result.kind}${
+              msg.result.ok ? "" : " (failed)"
+            }`,
+          });
+        } else if (msg.phase === "finished") {
+          setProgress({
+            done: msg.total,
+            total: msg.total,
+            label: `Refreshed ${msg.ok}/${msg.total} tasks`,
+          });
+        }
+      };
+      const results = await invoke<
+        { kind: string; conference: string; ok: boolean; summary: string }[]
+      >("refresh_data", {
+        conference:
+          view.kind === "standings"
+            ? view.conference || null
+            : view.fromConference || null,
+        onProgress: channel,
+      });
+      const ok = results.filter((r) => r.ok).length;
+      showToast(`Refreshed ${ok}/${results.length} tasks`);
+      setDataRevision((n) => n + 1);
+    } catch (e) {
+      showToast(`Refresh failed: ${e}`);
+    } finally {
+      setRefreshing(false);
+      window.setTimeout(() => setProgress(null), 1200);
+    }
+  }, [refreshing, showToast, view]);
   return (
     <>
       <div className="top-actions">
+        <RefreshButton busy={refreshing} onClick={refresh} />
         <ScreenshotButton onDone={showToast} />
         <ThemeToggle theme={theme} onToggle={toggleTheme} />
       </div>
+      {progress && (
+        <div className="progress-banner" role="status" aria-live="polite">
+          <div className="progress-label">
+            <span>Refreshing…</span>
+            <span>
+              {progress.total > 0
+                ? `${progress.done}/${progress.total} · ${progress.label}`
+                : progress.label}
+            </span>
+          </div>
+          <div className="progress-track">
+            <div
+              className="progress-fill"
+              style={{
+                width:
+                  progress.total > 0
+                    ? `${(progress.done / progress.total) * 100}%`
+                    : "0%",
+              }}
+            />
+          </div>
+        </div>
+      )}
       {toast && (
         <div className="toast" role="status" aria-live="polite">
           {toast}
@@ -301,6 +451,7 @@ function App() {
       )}
       {view.kind === "standings" ? (
         <BrowsePage
+          key={`browse-${dataRevision}`}
           initialConference={view.conference}
           initialTab={view.tab}
           onOpenRoster={(slug, name, fromConference, fromTab) =>
@@ -309,6 +460,7 @@ function App() {
         />
       ) : (
         <RosterPage
+          key={`roster-${view.slug}-${dataRevision}`}
           slug={view.slug}
           name={view.name}
           fromConference={view.fromConference}
@@ -359,6 +511,14 @@ function BrowsePage({
         <div className="tabs" role="tablist">
           <button
             role="tab"
+            aria-selected={tab === "conferences"}
+            className={`tab ${tab === "conferences" ? "tab-active" : ""}`}
+            onClick={() => setTab("conferences")}
+          >
+            Conferences
+          </button>
+          <button
+            role="tab"
             aria-selected={tab === "standings"}
             className={`tab ${tab === "standings" ? "tab-active" : ""}`}
             onClick={() => setTab("standings")}
@@ -374,24 +534,36 @@ function BrowsePage({
             Leaders
           </button>
         </div>
-        <label className="filter" title="Conference filter">
-          Conference:{" "}
-          <select value={selected} onChange={(e) => setSelected(e.target.value)}>
-            <option value="">All ({conferences.length})</option>
-            {conferences.map((c) => (
-              <option key={c} value={c}>
-                {labelFor(c)}
-              </option>
-            ))}
-          </select>
-        </label>
+        {tab !== "conferences" && (
+          <label className="filter" title="Conference filter">
+            Conference:{" "}
+            <select
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+            >
+              <option value="">All ({conferences.length})</option>
+              {conferences.map((c) => (
+                <option key={c} value={c}>
+                  {labelFor(c)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </header>
       {error && (
         <p className="error" role="alert">
           Error: {error}
         </p>
       )}
-      {tab === "standings" ? (
+      {tab === "conferences" ? (
+        <ConferencesPage
+          onOpenConference={(conf) => {
+            setSelected(conf);
+            setTab("standings");
+          }}
+        />
+      ) : tab === "standings" ? (
         <StandingsPage
           conference={selected}
           onOpenRoster={(slug, name) => onOpenRoster(slug, name, selected, tab)}
@@ -406,11 +578,112 @@ function BrowsePage({
   );
 }
 
+// ---- conferences --------------------------------------------------------
+
+type ConferenceSortKey = "conference" | "team_count" | "avg_rpi_rank";
+
+function ConferencesPage({
+  onOpenConference,
+}: {
+  onOpenConference: (conference: string) => void;
+}) {
+  const [rows, setRows] = useState<ConferenceSummary[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sort, toggleSort] = useSortSpec<ConferenceSortKey>();
+
+  useEffect(() => {
+    invoke<ConferenceSummary[]>("list_conference_summary")
+      .then(setRows)
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  const sortedRows = useMemo(() => {
+    if (!rows) return rows;
+    return applySort(rows, sort, (row, key) => {
+      switch (key) {
+        case "conference":
+          return labelFor(row.conference);
+        case "avg_rpi_rank":
+          // Unranked conferences sort last regardless of direction.
+          if (row.avg_rpi_rank === null) {
+            return sort?.dir === "desc" ? -Infinity : Infinity;
+          }
+          return row.avg_rpi_rank;
+        default:
+          return row[key];
+      }
+    });
+  }, [rows, sort]);
+
+  if (error) {
+    return (
+      <p className="error" role="alert">
+        Error: {error}
+      </p>
+    );
+  }
+  if (sortedRows === null) return <p>Loading…</p>;
+  if (sortedRows.length === 0) return <p>No conference data available.</p>;
+
+  return (
+    <table className="standings">
+      <thead>
+        <tr>
+          <SortHeader
+            label="Conference"
+            sortKey="conference"
+            sort={sort}
+            onToggle={toggleSort}
+          />
+          <SortHeader
+            label="Teams"
+            sortKey="team_count"
+            sort={sort}
+            onToggle={toggleSort}
+          />
+          <SortHeader
+            label="Avg RPI Rank"
+            sortKey="avg_rpi_rank"
+            sort={sort}
+            onToggle={toggleSort}
+          />
+        </tr>
+      </thead>
+      <tbody>
+        {sortedRows.map((r) => (
+          <tr key={r.conference}>
+            <td>
+              <button
+                className="linklike"
+                onClick={() => onOpenConference(r.conference)}
+                title={`Open ${labelFor(r.conference)} standings`}
+              >
+                {labelFor(r.conference)}
+              </button>
+            </td>
+            <td>{r.team_count}</td>
+            <td
+              title={
+                r.avg_rpi_rank === null
+                  ? "No RPI-ranked teams yet"
+                  : `Mean rank across ${r.ranked_count} ranked team${r.ranked_count === 1 ? "" : "s"}`
+              }
+            >
+              {r.avg_rpi_rank === null ? "—" : r.avg_rpi_rank.toFixed(1)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 // ---- standings ----------------------------------------------------------
 
 type StandingSortKey =
   | "program_name"
   | "conference"
+  | "rpi_rank"
   | "points"
   | "games_played"
   | "wins"
@@ -468,6 +741,13 @@ function StandingsPage({
           return labelFor(row.conference);
         case "program_name":
           return row.program_name || row.program_slug;
+        case "rpi_rank":
+          // Rank 0 means "unranked" — always sort those last regardless
+          // of direction, mirroring the roster's null-handling pattern.
+          if (row.rpi_rank === 0) {
+            return sort?.dir === "desc" ? -Infinity : Infinity;
+          }
+          return row.rpi_rank;
         default:
           return row[key];
       }
@@ -524,6 +804,12 @@ function StandingsPage({
                 onToggle={toggleSort}
               />
               <SortHeader
+                label="RPI"
+                sortKey="rpi_rank"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+              <SortHeader
                 label="PTS"
                 sortKey="points"
                 sort={sort}
@@ -576,6 +862,9 @@ function StandingsPage({
                   </button>
                 </td>
                 <td title={fullNameFor(s.conference)}>{labelFor(s.conference)}</td>
+                <td title="RPI rank across every loaded program (1 = best)">
+                  {s.rpi_rank === 0 ? "—" : s.rpi_rank}
+                </td>
                 <td>{s.points}</td>
                 <td>{s.games_played}</td>
                 <td>{`${s.wins}-${s.losses}-${s.ties}`}</td>

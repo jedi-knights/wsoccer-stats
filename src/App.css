@@ -339,7 +339,8 @@ a.external-link:hover {
 }
 
 .theme-toggle,
-.screenshot-btn {
+.screenshot-btn,
+.refresh-btn {
   background: var(--input-bg);
   border: 1px solid var(--input-border);
   color: var(--text);
@@ -352,13 +353,71 @@ a.external-link:hover {
 }
 
 .theme-toggle:hover,
-.screenshot-btn:hover {
+.screenshot-btn:hover,
+.refresh-btn:hover {
   background: var(--header-hover);
 }
 
-.screenshot-btn:disabled {
+.screenshot-btn:disabled,
+.refresh-btn:disabled {
   opacity: 0.5;
   cursor: wait;
+}
+
+.refresh-icon {
+  display: inline-block;
+}
+
+.refresh-icon.spinning {
+  animation: spin 1.2s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.progress-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  min-width: 320px;
+  max-width: 560px;
+  background: var(--input-bg);
+  color: var(--text);
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
+.progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.progress-track {
+  width: 100%;
+  height: 6px;
+  background: var(--stripe);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--link);
+  transition: width 200ms ease-out;
 }
 
 .toast {
