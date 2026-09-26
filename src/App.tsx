@@ -694,6 +694,166 @@ const STANDINGS_MODES: { key: StandingsMode; label: string }[] = [
   { key: "non_conference", label: "Non-conference" },
 ];
 
+/// GF-vs-GA scatter plot, one dot per team that has played at least one
+/// game. GF grows to the right, GA grows DOWN — so the top-right corner
+/// is high-scoring + defensively solid (best), bottom-left is
+/// low-scoring + leaky (worst). A dashed diagonal marks GD = 0 so
+/// teams above the line have positive GD and teams below have negative.
+/// Clicking a dot opens the roster for that team.
+function GoalsScatter({
+  rows,
+  onOpenRoster,
+}: {
+  rows: Standing[];
+  onOpenRoster: (slug: string, name: string) => void;
+}) {
+  // Skip stubs and unplayed teams — they'd all cluster at the origin.
+  const points = rows.filter(
+    (r) => r.has_schedule_data && r.games_played > 0,
+  );
+  if (points.length < 2) return null;
+
+  // Fixed height, width scales with the container up to a cap. Axis
+  // maxima round up to the next multiple of 5 so tick lines land on
+  // familiar numbers.
+  const width = 720;
+  const height = 320;
+  const pad = { top: 16, right: 24, bottom: 40, left: 44 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+
+  const maxGF = Math.max(5, ...points.map((p) => p.goals_for));
+  const maxGA = Math.max(5, ...points.map((p) => p.goals_against));
+  const axisMax = Math.ceil(Math.max(maxGF, maxGA) / 5) * 5;
+
+  const xFor = (gf: number) => pad.left + (gf / axisMax) * plotW;
+  const yFor = (ga: number) => pad.top + (ga / axisMax) * plotH;
+
+  const ticks: number[] = [];
+  const step = axisMax >= 30 ? 10 : 5;
+  for (let v = 0; v <= axisMax; v += step) ticks.push(v);
+
+  return (
+    <div className="goals-scatter">
+      <svg
+        width="100%"
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="xMidYMid meet"
+        role="img"
+        aria-label="Goals for vs. goals against"
+      >
+        {/* Diagonal reference line at GF = GA (goal differential zero). */}
+        <line
+          x1={xFor(0)}
+          y1={yFor(0)}
+          x2={xFor(axisMax)}
+          y2={yFor(axisMax)}
+          stroke="var(--form-outline, #999)"
+          strokeDasharray="4 4"
+          strokeWidth={1}
+          opacity={0.5}
+        />
+
+        {/* Tick lines + labels */}
+        {ticks.map((v) => (
+          <g key={`tx-${v}`}>
+            <line
+              x1={xFor(v)}
+              y1={pad.top}
+              x2={xFor(v)}
+              y2={pad.top + plotH}
+              stroke="var(--border)"
+              strokeWidth={1}
+            />
+            <text
+              x={xFor(v)}
+              y={pad.top + plotH + 16}
+              textAnchor="middle"
+              fontSize={11}
+              fill="var(--text-muted)"
+            >
+              {v}
+            </text>
+          </g>
+        ))}
+        {ticks.map((v) => (
+          <g key={`ty-${v}`}>
+            <line
+              x1={pad.left}
+              y1={yFor(v)}
+              x2={pad.left + plotW}
+              y2={yFor(v)}
+              stroke="var(--border)"
+              strokeWidth={1}
+            />
+            <text
+              x={pad.left - 6}
+              y={yFor(v) + 4}
+              textAnchor="end"
+              fontSize={11}
+              fill="var(--text-muted)"
+            >
+              {v}
+            </text>
+          </g>
+        ))}
+
+        {/* Axis titles */}
+        <text
+          x={pad.left + plotW / 2}
+          y={height - 6}
+          textAnchor="middle"
+          fontSize={12}
+          fill="var(--heading)"
+        >
+          Goals For
+        </text>
+        <text
+          transform={`translate(12 ${pad.top + plotH / 2}) rotate(-90)`}
+          textAnchor="middle"
+          fontSize={12}
+          fill="var(--heading)"
+        >
+          Goals Against
+        </text>
+
+        {/* Team dots. Radius shrinks when the point cloud is dense so a
+            300-dot "All" view stays readable. */}
+        {(() => {
+          const r = points.length > 100 ? 3 : points.length > 40 ? 4 : 5;
+          return points.map((p) => {
+            const gd = p.goals_for - p.goals_against;
+            const fill =
+              gd > 0
+                ? "var(--form-win)"
+                : gd < 0
+                  ? "var(--form-loss)"
+                  : "var(--form-tie)";
+            return (
+              <circle
+                key={p.program_slug}
+                cx={xFor(p.goals_for)}
+                cy={yFor(p.goals_against)}
+                r={r}
+                fill={fill}
+                opacity={0.85}
+                style={{ cursor: "pointer" }}
+                onClick={() =>
+                  onOpenRoster(p.program_slug, p.program_name || p.program_slug)
+                }
+              >
+                <title>
+                  {`${p.program_name || p.program_slug} · GF ${p.goals_for} · GA ${p.goals_against} · GD ${gd >= 0 ? "+" : ""}${gd}`}
+                </title>
+              </circle>
+            );
+          });
+        })()}
+      </svg>
+    </div>
+  );
+}
+
 function StandingsPage({
   conference,
   onOpenRoster,
@@ -781,6 +941,9 @@ function StandingsPage({
       {sortedRows === null && !error && <p>Loading…</p>}
       {sortedRows !== null && sortedRows.length === 0 && !error && (
         <p>No games found for this selection.</p>
+      )}
+      {sortedRows !== null && sortedRows.length > 0 && (
+        <GoalsScatter rows={sortedRows} onOpenRoster={onOpenRoster} />
       )}
       {sortedRows !== null && sortedRows.length > 0 && (
         <table className="standings">

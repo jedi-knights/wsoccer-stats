@@ -297,6 +297,15 @@ table.leaders th {
   color: var(--form-outline);
 }
 
+.goals-scatter {
+  margin: 8px 0 16px;
+  max-width: 720px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  background: var(--input-bg);
+}
+
 table.standings th.sortable,
 table.roster th.sortable,
 table.leaders th.sortable {
