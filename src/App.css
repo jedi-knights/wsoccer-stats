@@ -306,6 +306,99 @@ table.leaders th {
   background: var(--input-bg);
 }
 
+/* Head-to-head matrix — square W-L-T grid. Wrapper is horizontally
+   scrollable so wide conferences (18-team Big Ten) don't push the
+   layout wider than the container. */
+.h2h-wrapper {
+  margin: 8px 0 16px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg);
+}
+
+.h2h-matrix {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+}
+
+.h2h-matrix th,
+.h2h-matrix td {
+  border: 1px solid var(--border);
+  padding: 4px 6px;
+  min-width: 44px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.h2h-row-header {
+  text-align: right !important;
+  padding-right: 8px !important;
+  position: sticky;
+  left: 0;
+  background: var(--header-bg);
+  z-index: 1;
+  min-width: 120px !important;
+}
+
+.h2h-col-header {
+  /* Rotate column labels so a 16-team matrix fits in the container
+     without each column being 100+ px wide. The height reserved for
+     the header row accommodates the rotated text. */
+  height: 100px;
+  vertical-align: bottom;
+  padding: 4px 0 !important;
+  background: var(--header-bg);
+}
+
+.h2h-col-header > span {
+  display: inline-block;
+  transform: rotate(-60deg);
+  transform-origin: center bottom;
+  white-space: nowrap;
+  font-weight: normal;
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.h2h-corner {
+  background: var(--header-bg);
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 120px !important;
+}
+
+.h2h-self {
+  background: var(--stripe);
+  color: var(--text-muted);
+}
+
+.h2h-cell {
+  cursor: default;
+}
+
+.h2h-empty {
+  background: transparent;
+}
+
+.h2h-w {
+  background: color-mix(in srgb, var(--form-win) 25%, transparent);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.h2h-l {
+  background: color-mix(in srgb, var(--form-loss) 22%, transparent);
+  color: var(--text);
+}
+
+.h2h-t {
+  background: color-mix(in srgb, var(--form-tie) 25%, transparent);
+  color: var(--text);
+}
+
 table.standings th.sortable,
 table.roster th.sortable,
 table.leaders th.sortable {

@@ -65,6 +65,16 @@ type RosterEntry = {
   assists: number | null;
 };
 
+type H2HGame = {
+  program_slug: string;
+  opponent_slug: string;
+  date: string;
+  home_away: string;
+  outcome: "W" | "L" | "T" | string;
+  team_score: number;
+  opponent_score: number;
+};
+
 type RefreshResult = {
   kind: string;
   conference: string;
@@ -854,6 +864,117 @@ function GoalsScatter({
   );
 }
 
+/// Square W-L-T grid of every conference member vs every other. Cell
+/// (row, col) shows the result of row-team's game against col-team from
+/// the row team's perspective. Empty cells = teams haven't played yet;
+/// diagonal = self. Uses the current standings sort order so users can
+/// re-order the matrix by clicking the standings headers.
+function HeadToHeadMatrix({
+  conference,
+  teams,
+}: {
+  conference: string;
+  teams: Standing[];
+}) {
+  const [games, setGames] = useState<H2HGame[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!conference) {
+      setGames(null);
+      return;
+    }
+    setGames(null);
+    setError(null);
+    invoke<H2HGame[]>("list_head_to_head", { conference })
+      .then(setGames)
+      .catch((e) => setError(String(e)));
+  }, [conference]);
+
+  // Only meaningful when a conference is selected and we can see enough
+  // members to fill a grid.
+  if (!conference) return null;
+  const rowTeams = teams.filter((t) => t.has_schedule_data);
+  if (rowTeams.length < 2) return null;
+  if (error) {
+    return (
+      <p className="error" role="alert">
+        Head-to-head error: {error}
+      </p>
+    );
+  }
+  if (games === null) return null;
+
+  const cellMap = new Map<string, H2HGame>();
+  for (const g of games) {
+    cellMap.set(`${g.program_slug}|${g.opponent_slug}`, g);
+  }
+
+  return (
+    <div className="h2h-wrapper">
+      <table className="h2h-matrix">
+        <thead>
+          <tr>
+            <th className="h2h-corner" />
+            {rowTeams.map((t) => (
+              <th
+                key={t.program_slug}
+                className="h2h-col-header"
+                title={t.program_name || t.program_slug}
+              >
+                <span>{t.program_name || t.program_slug}</span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rowTeams.map((row) => (
+            <tr key={row.program_slug}>
+              <th scope="row" className="h2h-row-header">
+                {row.program_name || row.program_slug}
+              </th>
+              {rowTeams.map((col) => {
+                if (row.program_slug === col.program_slug) {
+                  return (
+                    <td key={col.program_slug} className="h2h-self">
+                      ·
+                    </td>
+                  );
+                }
+                const g = cellMap.get(
+                  `${row.program_slug}|${col.program_slug}`,
+                );
+                if (!g) {
+                  return (
+                    <td
+                      key={col.program_slug}
+                      className="h2h-cell h2h-empty"
+                      title="Not played"
+                    />
+                  );
+                }
+                const cls = `h2h-cell h2h-${g.outcome.toLowerCase()}`;
+                const venue =
+                  g.home_away === "away"
+                    ? "at"
+                    : g.home_away === "neutral"
+                      ? "vs (n)"
+                      : "vs";
+                const title = `${row.program_name || row.program_slug} ${venue} ${col.program_name || col.program_slug} · ${g.date} · ${g.outcome} ${g.team_score}-${g.opponent_score}`;
+                return (
+                  <td key={col.program_slug} className={cls} title={title}>
+                    {g.team_score}-{g.opponent_score}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function StandingsPage({
   conference,
   onOpenRoster,
@@ -944,6 +1065,9 @@ function StandingsPage({
       )}
       {sortedRows !== null && sortedRows.length > 0 && (
         <GoalsScatter rows={sortedRows} onOpenRoster={onOpenRoster} />
+      )}
+      {sortedRows !== null && sortedRows.length > 0 && (
+        <HeadToHeadMatrix conference={conference} teams={sortedRows} />
       )}
       {sortedRows !== null && sortedRows.length > 0 && (
         <table className="standings">
