@@ -1056,6 +1056,64 @@ function fmtStat(n: number | null): string {
   return n === null ? "—" : String(n);
 }
 
+// ---- form timeline ------------------------------------------------------
+
+/// Horizontal strip of one dot per game in chronological order. Played
+/// games are filled in W/L/T colors; unplayed games are outlined so the
+/// user sees how much of the season is ahead. Tooltip on each dot shows
+/// the date, opponent, and result.
+function FormTimeline({ games }: { games: Game[] }) {
+  // Games arrive sorted by date from list_schedule.
+  const RADIUS = 7;
+  const GAP = 10;
+  const STROKE = 1.5;
+  const HEIGHT = RADIUS * 2 + STROKE * 2 + 4;
+  const step = RADIUS * 2 + GAP;
+  const width = games.length * step - GAP + STROKE * 2;
+
+  const fillFor = (g: Game): string => {
+    if (!g.result) return "transparent";
+    if (g.result.outcome === "W") return "var(--form-win, #2d8f3d)";
+    if (g.result.outcome === "L") return "var(--form-loss, #c53838)";
+    if (g.result.outcome === "T") return "var(--form-tie, #808080)";
+    return "transparent";
+  };
+
+  return (
+    <div className="form-timeline" aria-label="Season form">
+      <svg
+        width={width}
+        height={HEIGHT}
+        viewBox={`0 0 ${width} ${HEIGHT}`}
+        role="img"
+      >
+        {games.map((g, i) => {
+          const cx = STROKE + RADIUS + i * step;
+          const cy = HEIGHT / 2;
+          const played = g.result !== null;
+          const title = g.result
+            ? `${g.date} · ${g.home_away === "away" ? "at" : "vs"} ${g.opponent} · ${g.result.outcome} ${g.result.team_score}-${g.result.opponent_score}`
+            : `${g.date} · ${g.home_away === "away" ? "at" : "vs"} ${g.opponent} · upcoming`;
+          return (
+            <circle
+              key={`${g.date}-${g.opponent}-${i}`}
+              cx={cx}
+              cy={cy}
+              r={RADIUS}
+              fill={fillFor(g)}
+              stroke="var(--form-outline, currentColor)"
+              strokeWidth={played ? 0 : STROKE}
+              opacity={played ? 1 : 0.35}
+            >
+              <title>{title}</title>
+            </circle>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 function RosterPage({
   slug,
   name,
@@ -1236,6 +1294,9 @@ function RosterPage({
       {games === null && !scheduleError && <p>Loading schedule…</p>}
       {games !== null && games.length === 0 && !scheduleError && (
         <p>No schedule data for this program.</p>
+      )}
+      {games !== null && games.length > 0 && (
+        <FormTimeline games={games} />
       )}
       {games !== null && games.length > 0 && (
         <table className="schedule">
