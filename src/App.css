@@ -317,11 +317,41 @@ table.leaders th {
   background: var(--input-bg);
 }
 
+.chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
 .chart-title {
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--heading);
-  margin-bottom: 4px;
+}
+
+.chart-copy-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-family: inherit;
+}
+
+.chart-copy-btn:hover:not(:disabled) {
+  background: var(--header-hover);
+  color: var(--text);
+  border-color: var(--input-border);
+}
+
+.chart-copy-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 /* Head-to-head matrix — square W-L-T grid. Wrapper is horizontally
