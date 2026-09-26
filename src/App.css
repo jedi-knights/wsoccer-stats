@@ -297,24 +297,40 @@ table.leaders th {
   color: var(--form-outline);
 }
 
-.goals-scatter {
-  margin: 8px 0 16px;
-  max-width: 720px;
+/* All standings charts (scatter + matrix) share the same layout —
+   full container width, matching the width of the standings table
+   above them. Each chart's inner block adopts a common frame so the
+   three visualisations read as a coherent panel. */
+.standings-charts {
+  margin: 24px 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.chart-block {
+  width: 100%;
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 4px 8px;
+  padding: 8px 12px;
   background: var(--input-bg);
+}
+
+.chart-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--heading);
+  margin-bottom: 4px;
 }
 
 /* Head-to-head matrix — square W-L-T grid. Wrapper is horizontally
    scrollable so wide conferences (18-team Big Ten) don't push the
-   layout wider than the container. */
+   layout wider than the container. Sits inside a .chart-block so
+   the outer frame + title come from the chart-block styles. */
 .h2h-wrapper {
-  margin: 8px 0 16px;
+  width: 100%;
   overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--input-bg);
 }
 
 .h2h-matrix {
@@ -344,22 +360,29 @@ table.leaders th {
 
 .h2h-col-header {
   /* Rotate column labels so a 16-team matrix fits in the container
-     without each column being 100+ px wide. The height reserved for
-     the header row accommodates the rotated text. */
-  height: 100px;
+     without each column being 100+ px wide. The header row reserves
+     enough height for the rotated text; the span is positioned
+     absolutely and rotated around its bottom-left corner so nothing
+     ever extends into the first data row below. */
+  height: 120px;
   vertical-align: bottom;
-  padding: 4px 0 !important;
+  padding: 0 !important;
   background: var(--header-bg);
+  position: relative;
+  overflow: visible;
 }
 
 .h2h-col-header > span {
-  display: inline-block;
-  transform: rotate(-60deg);
-  transform-origin: center bottom;
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform-origin: 0 100%;
+  transform: rotate(-55deg);
   white-space: nowrap;
   font-weight: normal;
   font-size: 0.75rem;
   color: var(--text);
+  padding-left: 4px;
 }
 
 .h2h-corner {

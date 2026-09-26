@@ -386,7 +386,9 @@ fn list_standings(
         .iter()
         .map(|p| (p.name.as_str(), p.slug.as_str()))
         .collect();
-    let rpi_by_slug = standings::compute_rpi_seeded(&all_games, &registry_seed);
+    let rpi_full = standings::compute_rpi_full(&all_games, &registry_seed);
+    let rpi_by_slug: std::collections::HashMap<String, f64> =
+        rpi_full.iter().map(|(k, v)| (k.clone(), v.rpi)).collect();
     let rank_by_slug = standings::rank_by_slug(&rpi_by_slug);
 
     let mut games = all_games;
@@ -401,6 +403,10 @@ fn list_standings(
     let mut standings = standings::compute_standings(&games);
     for s in &mut standings {
         s.rpi_rank = rank_by_slug.get(&s.program_slug).copied().unwrap_or(0);
+        if let Some(comp) = rpi_full.get(&s.program_slug) {
+            s.rpi = comp.rpi;
+            s.sos = comp.owp;
+        }
     }
 
     // A team with no games we could ingest (Oklahoma's Nuxt SPA is the
@@ -678,7 +684,9 @@ fn list_conference_summary() -> Result<Vec<ConferenceSummary>, String> {
         .iter()
         .map(|p| (p.name.as_str(), p.slug.as_str()))
         .collect();
-    let rpi_by_slug = standings::compute_rpi_seeded(&all_games, &registry_seed);
+    let rpi_full = standings::compute_rpi_full(&all_games, &registry_seed);
+    let rpi_by_slug: std::collections::HashMap<String, f64> =
+        rpi_full.iter().map(|(k, v)| (k.clone(), v.rpi)).collect();
     // Share the ranking helper with ``list_standings`` so the RPI column
     // and the "avg RPI rank" here can't drift apart.
     let rank_by_slug = standings::rank_by_slug(&rpi_by_slug);

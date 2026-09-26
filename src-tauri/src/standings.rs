@@ -30,6 +30,15 @@ pub struct Standing {
     /// 0 when the team has no played games we can rank.
     #[serde(default)]
     pub rpi_rank: u32,
+    /// Raw RPI value in [0, 1] (0 = worst, ~0.75 = elite). Powers the
+    /// Y-axis of the SoS-vs-RPI scatter.
+    #[serde(default)]
+    pub rpi: f64,
+    /// Strength of Schedule — the OWP component of RPI: mean opponent
+    /// winning percentage with games vs this team excluded. Higher =
+    /// tougher schedule. Powers the X-axis of the SoS-vs-RPI scatter.
+    #[serde(default)]
+    pub sos: f64,
     /// False for zero-record stubs filled from the registry to represent
     /// a conference member whose schedule wasn't ingested (Nuxt SPA,
     /// unknown CMS, etc.). Frontends render such rows with em-dashes to
@@ -151,8 +160,25 @@ pub type NameSlugSeed<'a> = &'a [(&'a str, &'a str)];
 /// against programs whose schedule failed to ingest (Nuxt SPAs) still
 /// count in OWP/OOWP.
 ///
-/// Keyed by `program_slug`.
-pub fn compute_rpi_seeded(all_games: &[Game], extra_names: NameSlugSeed) -> HashMap<String, f64> {
+/// The three RPI components for one program — WP, OWP (= strength of
+/// schedule), OOWP — plus the combined RPI. Callers that need SoS
+/// specifically read `.owp`. `wp` and `oowp` are exposed for future
+/// consumers even if no current caller reads them.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+pub struct RpiComponents {
+    pub rpi: f64,
+    pub wp: f64,
+    pub owp: f64,
+    pub oowp: f64,
+}
+
+/// Like `compute_rpi_seeded` but returns the full breakdown so
+/// callers can surface strength-of-schedule (== OWP) alongside RPI.
+pub fn compute_rpi_full(
+    all_games: &[Game],
+    extra_names: NameSlugSeed,
+) -> HashMap<String, RpiComponents> {
     #[derive(Default, Clone)]
     struct Record {
         w: u32,
@@ -286,7 +312,7 @@ pub fn compute_rpi_seeded(all_games: &[Game], extra_names: NameSlugSeed) -> Hash
         .map(|(name, slug)| (slug.clone(), name.clone()))
         .collect();
 
-    let mut rpi_by_slug: HashMap<String, f64> = HashMap::new();
+    let mut out: HashMap<String, RpiComponents> = HashMap::new();
     for (t_slug, t_record) in &records {
         let wp = t_record.wp();
         let t_name_lower = slug_to_name_lower
@@ -295,7 +321,10 @@ pub fn compute_rpi_seeded(all_games: &[Game], extra_names: NameSlugSeed) -> Hash
             .unwrap_or_default();
 
         let Some(t_opps) = opponents.get(t_slug) else {
-            rpi_by_slug.insert(t_slug.clone(), 0.25 * wp);
+            out.insert(
+                t_slug.clone(),
+                RpiComponents { rpi: 0.25 * wp, wp, owp: 0.0, oowp: 0.0 },
+            );
             continue;
         };
 
@@ -327,9 +356,17 @@ pub fn compute_rpi_seeded(all_games: &[Game], extra_names: NameSlugSeed) -> Hash
         let owp = if owp_n == 0 { 0.0 } else { owp_sum / owp_n as f64 };
         let oowp = if oowp_n == 0 { 0.0 } else { oowp_sum / oowp_n as f64 };
 
-        rpi_by_slug.insert(t_slug.clone(), 0.25 * wp + 0.50 * owp + 0.25 * oowp);
+        out.insert(
+            t_slug.clone(),
+            RpiComponents {
+                rpi: 0.25 * wp + 0.50 * owp + 0.25 * oowp,
+                wp,
+                owp,
+                oowp,
+            },
+        );
     }
-    rpi_by_slug
+    out
 }
 
 #[cfg(test)]
@@ -477,10 +514,10 @@ mod tests {
             game("c", "a", "L", 0, 2),
             game("c", "b", "L", 0, 1),
         ];
-        let rpi = compute_rpi_seeded(&games, &[]);
-        assert!((rpi["a"] - 0.625).abs() < 1e-9, "a RPI: {}", rpi["a"]);
-        assert!((rpi["b"] - 0.500).abs() < 1e-9, "b RPI: {}", rpi["b"]);
-        assert!((rpi["c"] - 0.375).abs() < 1e-9, "c RPI: {}", rpi["c"]);
+        let rpi = compute_rpi_full(&games, &[]);
+        assert!((rpi["a"].rpi - 0.625).abs() < 1e-9, "a RPI: {}", rpi["a"].rpi);
+        assert!((rpi["b"].rpi - 0.500).abs() < 1e-9, "b RPI: {}", rpi["b"].rpi);
+        assert!((rpi["c"].rpi - 0.375).abs() < 1e-9, "c RPI: {}", rpi["c"].rpi);
     }
 
     #[test]
@@ -494,13 +531,13 @@ mod tests {
             game("a", "unknown_team", "W", 3, 0),
             game("b", "a", "L", 0, 1),
         ];
-        let rpi = compute_rpi_seeded(&games, &[]);
+        let rpi = compute_rpi_full(&games, &[]);
         // WP(A) = 2/2 = 1.0
         // OWP(A) uses only b (WP excl A = 0/1 = 0.0) → 0.0
         // OOWP(A) uses only b's OWP: b's opponents = {a}, wp_excl_b(a) = 1/1
         //   → OWP(b) = 1.0 → OOWP(A) = 1.0
         // RPI(A) = 0.25*1.0 + 0.5*0.0 + 0.25*1.0 = 0.5
-        assert!((rpi["a"] - 0.5).abs() < 1e-9, "a RPI: {}", rpi["a"]);
+        assert!((rpi["a"].rpi - 0.5).abs() < 1e-9, "a RPI: {}", rpi["a"].rpi);
     }
 
     #[test]
