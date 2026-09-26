@@ -354,6 +354,46 @@ table.leaders th {
   cursor: wait;
 }
 
+/* Star column in the standings table — toggles per-team highlight on
+   the charts below. Narrow so it doesn't crowd the Program column. */
+.star-col {
+  width: 24px;
+  text-align: center !important;
+  padding: 4px !important;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  user-select: none;
+}
+
+.star-btn {
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  font-family: inherit;
+}
+
+.star-btn:hover:not(:disabled) {
+  color: var(--link);
+}
+
+.star-btn-on {
+  color: var(--link) !important;
+}
+
+.star-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.standings tbody tr.row-selected,
+.standings tbody tr.row-selected:nth-child(even) {
+  background: color-mix(in srgb, var(--link) 12%, transparent);
+}
+
 /* Head-to-head matrix — square W-L-T grid. Wrapper is horizontally
    scrollable so wide conferences (18-team Big Ten) don't push the
    layout wider than the container. Sits inside a .chart-block so
