@@ -1132,6 +1132,9 @@ function HeadToHeadMatrix({
 }) {
   const [games, setGames] = useState<H2HGame[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // All hooks must run in the same order on every render — declare
+  // ref up here alongside state/effect, BEFORE any conditional returns.
+  const tableRef = useRef<HTMLTableElement>(null);
 
   useEffect(() => {
     if (!conference) {
@@ -1164,7 +1167,6 @@ function HeadToHeadMatrix({
     cellMap.set(`${g.program_slug}|${g.opponent_slug}`, g);
   }
 
-  const tableRef = useRef<HTMLTableElement>(null);
   return (
     <ChartFrame
       title="Head-to-Head"
