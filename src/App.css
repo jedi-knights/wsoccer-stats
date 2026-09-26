@@ -24,6 +24,12 @@
   --error-bg: #fee;
   --error-text: #b71c1c;
   --error-border: #f6b5b5;
+  /* Form-timeline dot colors. Chosen so the light-mode versions read
+     against #f6f6f6 and dark-mode versions read against #1c1c1c. */
+  --form-win: #2d8f3d;
+  --form-loss: #c53838;
+  --form-tie: #808080;
+  --form-outline: #999;
 
   color: var(--text);
   background-color: var(--bg);
@@ -58,6 +64,10 @@
   --dark-error-bg: #3b1a1a;
   --dark-error-text: #ffdada;
   --dark-error-border: #6b2323;
+  --dark-form-win: #6dd678;
+  --dark-form-loss: #ff8b8b;
+  --dark-form-tie: #aaa;
+  --dark-form-outline: #666;
 }
 
 /* Explicit dark preference — user toggled the theme button. */
@@ -81,6 +91,10 @@
   --error-bg: var(--dark-error-bg);
   --error-text: var(--dark-error-text);
   --error-border: var(--dark-error-border);
+  --form-win: var(--dark-form-win);
+  --form-loss: var(--dark-form-loss);
+  --form-tie: var(--dark-form-tie);
+  --form-outline: var(--dark-form-outline);
 }
 
 /* OS preference is dark AND user hasn't overridden to light. */
@@ -270,6 +284,17 @@ table.leaders th {
   margin: 24px 0 8px;
   font-size: 1.25rem;
   color: var(--heading);
+}
+
+.form-timeline {
+  margin: 4px 0 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.form-timeline svg {
+  display: block;
+  color: var(--form-outline);
 }
 
 table.standings th.sortable,
