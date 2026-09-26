@@ -795,6 +795,35 @@ function ChartFrame({
   );
 }
 
+/// Decide which side of a dot to place its label so the text stays
+/// inside the plot bounds. Returns:
+/// - `dx`: +1 for right-of-dot, -1 for left-of-dot (caller multiplies
+///   by `r + gap` to get the actual x offset)
+/// - `dy`: vertical offset added to the dot's cy (positive = down)
+/// - `textAnchor`: matching SVG `text-anchor` value so the text
+///   grows away from the dot in the right direction
+///
+/// Right-side flip when the dot sits in the right 35% of the plot;
+/// vertical offset shifts labels downward when the dot is at the very
+/// top so the ascender doesn't get clipped by the plot top border.
+function labelAnchorFor(
+  cx: number,
+  cy: number,
+  pad: { top: number; left: number; right: number; bottom: number },
+  plotW: number,
+  plotH: number,
+): { dx: 1 | -1; dy: number; textAnchor: "start" | "end" } {
+  const rightThreshold = pad.left + plotW * 0.65;
+  const topThreshold = pad.top + plotH * 0.1;
+  const flipLeft = cx >= rightThreshold;
+  const belowDot = cy <= topThreshold;
+  return {
+    dx: flipLeft ? -1 : 1,
+    dy: belowDot ? 14 : 4,
+    textAnchor: flipLeft ? "end" : "start",
+  };
+}
+
 /// GF-vs-GA scatter plot, one dot per team that has played at least one
 /// game. GF grows to the right, GA grows DOWN — so the top-right corner
 /// is high-scoring + defensively solid (best), bottom-left is
@@ -940,6 +969,7 @@ function GoalsScatter({
             const cx = xFor(p.goals_for);
             const cy = yFor(p.goals_against);
             const r = selected ? selR : baseR;
+            const anchor = labelAnchorFor(cx, cy, pad, plotW, plotH);
             return (
               <g key={p.program_slug}>
                 <circle
@@ -961,8 +991,9 @@ function GoalsScatter({
                 </circle>
                 {selected && (
                   <text
-                    x={cx + r + 4}
-                    y={cy + 4}
+                    x={cx + anchor.dx * (r + 4)}
+                    y={cy + anchor.dy}
+                    textAnchor={anchor.textAnchor}
                     fontSize={12}
                     fontWeight={600}
                     fill="var(--text)"
@@ -1135,6 +1166,7 @@ function SosScatter({
             const cx = xFor(p.sos);
             const cy = yFor(p.rpi);
             const r = selected ? selR : baseR;
+            const anchor = labelAnchorFor(cx, cy, pad, plotW, plotH);
             return (
               <g key={p.program_slug}>
                 <circle
@@ -1156,8 +1188,9 @@ function SosScatter({
                 </circle>
                 {selected && (
                   <text
-                    x={cx + r + 4}
-                    y={cy + 4}
+                    x={cx + anchor.dx * (r + 4)}
+                    y={cy + anchor.dy}
+                    textAnchor={anchor.textAnchor}
                     fontSize={12}
                     fontWeight={600}
                     fill="var(--text)"
