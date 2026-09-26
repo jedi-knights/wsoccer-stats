@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import type React from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import html2canvas from "html2canvas";
 import "./App.css";
@@ -104,6 +105,15 @@ type ConferenceSummary = {
 type View =
   | { kind: "standings"; conference: string; tab: Tab }
   | { kind: "roster"; slug: string; name: string; fromConference: string; fromTab: Tab };
+
+// Module-level toast emitter — App registers its `showToast` callback
+// at mount so deep components (per-chart screenshot buttons) can pop a
+// toast without prop-drilling.
+let TOAST_EMITTER: ((msg: string) => void) | null = null;
+
+function emitToast(msg: string): void {
+  if (TOAST_EMITTER) TOAST_EMITTER(msg);
+}
 
 // Conference labels come from the backend (sourced from the aip
 // registry's ``conferences.ndjson``). This module-level map is
@@ -218,15 +228,28 @@ function initialTheme(): Theme {
     : "light";
 }
 
-async function captureScreenshotToClipboard(): Promise<"ok" | "no-clipboard" | "denied" | "error"> {
+async function captureScreenshotToClipboard(
+  target?: HTMLElement | null,
+): Promise<"ok" | "no-clipboard" | "denied" | "error"> {
   try {
-    const canvas = await html2canvas(document.body, {
+    const el = target ?? document.body;
+    const canvas = await html2canvas(el, {
       backgroundColor:
-        getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#ffffff",
-      // Ignore the on-screen buttons so the screenshot isn't cluttered.
-      ignoreElements: (el) =>
-        el.classList?.contains("top-actions") || el.classList?.contains("toast"),
+        getComputedStyle(document.documentElement)
+          .getPropertyValue("--bg")
+          .trim() || "#ffffff",
+      // Ignore the on-screen chrome (global buttons, toasts, per-chart
+      // copy buttons) so the screenshot is just the content.
+      ignoreElements: (node) =>
+        node.classList?.contains("top-actions") ||
+        node.classList?.contains("toast") ||
+        node.classList?.contains("chart-copy-btn"),
       scale: window.devicePixelRatio || 1,
+      // For a scrollable target (h2h wrapper) capture the full un-clipped
+      // content, not just the visible portion.
+      width: Math.max(el.scrollWidth, el.clientWidth),
+      height: Math.max(el.scrollHeight, el.clientHeight),
+      windowWidth: Math.max(el.scrollWidth, document.documentElement.clientWidth),
     });
     const blob: Blob | null = await new Promise((resolve) =>
       canvas.toBlob(resolve, "image/png")
@@ -334,6 +357,12 @@ function App() {
     setToast(msg);
     window.setTimeout(() => setToast(null), 2500);
   }, []);
+  useEffect(() => {
+    TOAST_EMITTER = showToast;
+    return () => {
+      TOAST_EMITTER = null;
+    };
+  }, [showToast]);
 
   // ⌘/Ctrl + Shift + C — copy a screenshot of the whole app.
   useEffect(() => {
@@ -709,6 +738,63 @@ const STANDINGS_MODES: { key: StandingsMode; label: string }[] = [
   { key: "non_conference", label: "Non-conference" },
 ];
 
+/// Small clipboard-copy button rendered in the top-right of a chart
+/// frame. Takes a ref to the element to capture (usually the frame's
+/// outer div; for scrollable content pass the inner un-clipped node).
+/// Toasts on success/failure via the module-level emitter.
+function ChartCopyButton({ target }: { target: React.RefObject<HTMLElement> }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      className="chart-copy-btn"
+      disabled={busy}
+      title="Copy this chart to clipboard"
+      aria-label="Copy chart to clipboard"
+      onClick={async () => {
+        setBusy(true);
+        const result = await captureScreenshotToClipboard(target.current);
+        setBusy(false);
+        emitToast(
+          result === "ok"
+            ? "Chart copied to clipboard"
+            : result === "no-clipboard"
+              ? "Clipboard API unavailable in this webview"
+              : result === "denied"
+                ? "Clipboard permission denied"
+                : "Chart copy failed",
+        );
+      }}
+    >
+      {busy ? "⏳" : "📸"}
+    </button>
+  );
+}
+
+/// Shared frame + title + copy-button chrome for the standings charts.
+/// The copy button captures whatever ref is passed (defaults to the
+/// frame's outer div). Children render below the title bar.
+function ChartFrame({
+  title,
+  captureRef,
+  children,
+}: {
+  title: string;
+  captureRef?: React.RefObject<HTMLElement>;
+  children: React.ReactNode;
+}) {
+  const localRef = useRef<HTMLDivElement>(null);
+  const target = captureRef ?? (localRef as React.RefObject<HTMLElement>);
+  return (
+    <div className="chart-block" ref={localRef}>
+      <div className="chart-header">
+        <div className="chart-title">{title}</div>
+        <ChartCopyButton target={target} />
+      </div>
+      {children}
+    </div>
+  );
+}
+
 /// GF-vs-GA scatter plot, one dot per team that has played at least one
 /// game. GF grows to the right, GA grows DOWN — so the top-right corner
 /// is high-scoring + defensively solid (best), bottom-left is
@@ -748,8 +834,7 @@ function GoalsScatter({
   for (let v = 0; v <= axisMax; v += step) ticks.push(v);
 
   return (
-    <div className="chart-block">
-      <div className="chart-title">Goals For vs. Goals Against</div>
+    <ChartFrame title="Goals For vs. Goals Against">
       <svg
         width="100%"
         viewBox={`0 0 ${width} ${height}`}
@@ -865,7 +950,7 @@ function GoalsScatter({
           });
         })()}
       </svg>
-    </div>
+    </ChartFrame>
   );
 }
 
@@ -919,8 +1004,7 @@ function SosScatter({
   const yTicks = tickVals(minY, maxY);
 
   return (
-    <div className="chart-block">
-      <div className="chart-title">Strength of Schedule vs. RPI</div>
+    <ChartFrame title="Strength of Schedule vs. RPI">
       <svg
         width="100%"
         viewBox={`0 0 ${width} ${height}`}
@@ -1030,7 +1114,7 @@ function SosScatter({
           ));
         })()}
       </svg>
-    </div>
+    </ChartFrame>
   );
 }
 
@@ -1080,11 +1164,14 @@ function HeadToHeadMatrix({
     cellMap.set(`${g.program_slug}|${g.opponent_slug}`, g);
   }
 
+  const tableRef = useRef<HTMLTableElement>(null);
   return (
-    <div className="chart-block h2h-block">
-      <div className="chart-title">Head-to-Head</div>
+    <ChartFrame
+      title="Head-to-Head"
+      captureRef={tableRef as React.RefObject<HTMLElement>}
+    >
       <div className="h2h-wrapper">
-        <table className="h2h-matrix">
+        <table className="h2h-matrix" ref={tableRef}>
         <thead>
           <tr>
             <th className="h2h-corner" />
@@ -1144,7 +1231,7 @@ function HeadToHeadMatrix({
         </tbody>
       </table>
       </div>
-    </div>
+    </ChartFrame>
   );
 }
 
