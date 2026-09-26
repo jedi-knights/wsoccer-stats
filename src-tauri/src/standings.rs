@@ -30,6 +30,16 @@ pub struct Standing {
     /// 0 when the team has no played games we can rank.
     #[serde(default)]
     pub rpi_rank: u32,
+    /// False for zero-record stubs filled from the registry to represent
+    /// a conference member whose schedule wasn't ingested (Nuxt SPA,
+    /// unknown CMS, etc.). Frontends render such rows with em-dashes to
+    /// distinguish "no data ingested" from "played 0 games in this view."
+    #[serde(default = "default_true")]
+    pub has_schedule_data: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Aggregate `games` into per-program standings, sorted by wins desc,
@@ -50,6 +60,7 @@ pub fn compute_standings(games: &[Game]) -> Vec<Standing> {
                 program_slug: game.program_slug.clone(),
                 program_name: game.program_name.clone(),
                 conference: game.conference.clone(),
+                has_schedule_data: true,
                 ..Standing::default()
             });
         entry.wins += w;
@@ -75,22 +86,73 @@ pub fn compute_standings(games: &[Game]) -> Vec<Standing> {
     standings
 }
 
+/// Standard competition ranking (1, 2, 2, 4) over the RPI map — best
+/// RPI ranks 1, ties share a rank, next distinct value skips ranks.
+/// Slug ascending as the final tie-break for determinism.
+///
+/// Called by both ``list_standings`` and ``list_conference_summary`` so
+/// the RPI column and the Conferences tab's "avg RPI rank" agree
+/// exactly. Extracted here so a change to the tie epsilon / tie-break
+/// order fixes both sites at once.
+pub fn rank_by_slug(rpi_by_slug: &HashMap<String, f64>) -> HashMap<String, u32> {
+    // Two f64 values that differ by less than this are treated as tied.
+    // 1e-9 leaves 5+ significant digits between distinct RPIs and is
+    // well above the ULP of a normal RPI value in [0, 1]; the earlier
+    // 1e-12 was below ULP for pairs where the two paths through the
+    // formula rounded differently.
+    const TIE_EPSILON: f64 = 1e-9;
+
+    let mut pairs: Vec<(&String, &f64)> = rpi_by_slug.iter().collect();
+    pairs.sort_by(|a, b| {
+        b.1.partial_cmp(a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(b.0))
+    });
+    let mut ranks = HashMap::new();
+    let mut prev_rpi: Option<f64> = None;
+    let mut current_rank: u32 = 0;
+    for (i, (slug, rpi)) in pairs.into_iter().enumerate() {
+        let rank = match prev_rpi {
+            Some(p) if (p - *rpi).abs() < TIE_EPSILON => current_rank,
+            _ => (i as u32) + 1,
+        };
+        ranks.insert(slug.clone(), rank);
+        current_rank = rank;
+        prev_rpi = Some(*rpi);
+    }
+    ranks
+}
+
+/// Extra `(normalized_name, slug)` entries to seed into the RPI
+/// opponent lookup. Callers pass this when they know about programs
+/// that have no games on disk (typically the program registry) so
+/// games against those programs are still counted in OWP / OOWP
+/// averages rather than silently skipped.
+///
+/// Each element is `(program_name, program_slug)` — the caller has
+/// NOT normalized the name; ``compute_rpi`` runs its own
+/// ``normalize_team_name`` on both sides so the seeding key matches
+/// the lookup key exactly.
+pub type NameSlugSeed<'a> = &'a [(&'a str, &'a str)];
+
 /// Classical NCAA-style Rating Percentage Index for each program that has
 /// at least one played game in `all_games`.
 ///
 /// `RPI = 0.25·WP + 0.50·OWP + 0.25·OOWP` where
 /// - `WP(T)` = `(wins + 0.5·ties) / gp`
-/// - `OWP(T)` = mean, over each opponent `O` of `T`, of `O`'s winning percentage
-///   **with the games between `O` and `T` removed** (so the team's own results
-///   don't inflate its opponents' rating)
+/// - `OWP(T)` = mean, over each opponent `O` of `T`, of `O`'s winning
+///   percentage **with the games between `O` and `T` removed** (so the
+///   team's own results don't inflate its opponents' rating)
 /// - `OOWP(T)` = mean, over each opponent `O` of `T`, of `O`'s standard OWP
 ///
-/// Opponents whose program schedule we haven't loaded (typically non-Power-4
-/// non-WCC teams) are skipped from the averages rather than assigned a
-/// baseline. Callers should read this as "RPI relative to the loaded universe."
+/// Opponents whose program schedule we haven't loaded AND aren't in
+/// `extra_names` are skipped from the averages rather than assigned a
+/// baseline. Pass the full program registry as `extra_names` so games
+/// against programs whose schedule failed to ingest (Nuxt SPAs) still
+/// count in OWP/OOWP.
 ///
 /// Keyed by `program_slug`.
-pub fn compute_rpi(all_games: &[Game]) -> HashMap<String, f64> {
+pub fn compute_rpi_seeded(all_games: &[Game], extra_names: NameSlugSeed) -> HashMap<String, f64> {
     #[derive(Default, Clone)]
     struct Record {
         w: u32,
@@ -144,6 +206,19 @@ pub fn compute_rpi(all_games: &[Game]) -> HashMap<String, f64> {
                 .entry(crate::normalize_team_name(&g.program_name))
                 .or_insert_with(|| g.program_slug.clone());
         }
+    }
+    // Seed extra name → slug pairs from the caller (typically the
+    // program registry) so opponents whose own schedule failed to
+    // ingest still resolve to a slug and contribute to OWP / OOWP.
+    // Without this, games against Oklahoma / Notre Dame / Iowa etc.
+    // silently drop from every SEC/ACC/Big-Ten opponent's rating.
+    for (name, slug) in extra_names {
+        if name.is_empty() || slug.is_empty() {
+            continue;
+        }
+        name_to_slug
+            .entry(crate::normalize_team_name(name))
+            .or_insert_with(|| (*slug).to_string());
     }
 
     // O's WP with every game against a team named `target_name_lower` removed.
@@ -402,7 +477,7 @@ mod tests {
             game("c", "a", "L", 0, 2),
             game("c", "b", "L", 0, 1),
         ];
-        let rpi = compute_rpi(&games);
+        let rpi = compute_rpi_seeded(&games, &[]);
         assert!((rpi["a"] - 0.625).abs() < 1e-9, "a RPI: {}", rpi["a"]);
         assert!((rpi["b"] - 0.500).abs() < 1e-9, "b RPI: {}", rpi["b"]);
         assert!((rpi["c"] - 0.375).abs() < 1e-9, "c RPI: {}", rpi["c"]);
@@ -419,7 +494,7 @@ mod tests {
             game("a", "unknown_team", "W", 3, 0),
             game("b", "a", "L", 0, 1),
         ];
-        let rpi = compute_rpi(&games);
+        let rpi = compute_rpi_seeded(&games, &[]);
         // WP(A) = 2/2 = 1.0
         // OWP(A) uses only b (WP excl A = 0/1 = 0.0) → 0.0
         // OOWP(A) uses only b's OWP: b's opponents = {a}, wp_excl_b(a) = 1/1

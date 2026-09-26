@@ -48,6 +48,16 @@ fn stats_dir() -> PathBuf {
 /// `RV Texas`, `T3 Florida State`). The owner's own `program_name` never
 /// carries these, so the raw string comparison misses conference matches
 /// — pass both sides through this before comparing.
+///
+/// Also collapses the ``St.`` ↔ ``State`` abbreviation drift: Missouri's
+/// own schedule writes opponents as ``Missouri St.`` while the registry
+/// name is ``Missouri State`` (same for Boise St., Fresno St., Mississippi
+/// St., etc.). Without this both lookups miss.
+///
+/// **Note:** operates on ASCII byte-substrings for the prefix strippers.
+/// Team names with non-ASCII characters (a hypothetical ``UCF-Osceola``
+/// with an accent) are left byte-identical after the strippers — only
+/// the final ``to_lowercase()`` sees Unicode.
 pub(crate) fn normalize_team_name(name: &str) -> String {
     let trimmed = name.trim();
     // Drop as many leading ranking tokens as we see. Each token is either
@@ -76,7 +86,28 @@ pub(crate) fn normalize_team_name(name: &str) -> String {
         }
         rest = stripped;
     }
-    rest.to_lowercase()
+    let lower = rest.to_lowercase();
+    // Collapse "St." → "State" so "Missouri St." matches "Missouri State".
+    // Match whole words only: replace " st." and " st" at end-of-string
+    // (case-insensitive, but ``lower`` is already lowercased).
+    expand_st_abbreviation(&lower)
+}
+
+fn expand_st_abbreviation(s: &str) -> String {
+    // Only the trailing "St." / "St" gets expanded to "state" — that's
+    // the case where the abbreviation stands for "State" (Missouri St.,
+    // Boise St., Fresno St.). A leading "St." means "Saint" (St. John's,
+    // St. Thomas) and MUST be left alone.
+    //
+    // Also require at least one preceding word so a program literally
+    // named just "St" doesn't get eaten.
+    let stripped = s.strip_suffix('.').unwrap_or(s);
+    if let Some(head) = stripped.strip_suffix(" st") {
+        if !head.is_empty() {
+            return format!("{head} state");
+        }
+    }
+    s.to_string()
 }
 
 /// Strip a leading parenthesized ranking marker: ``(#19) TCU``,
@@ -349,30 +380,14 @@ fn list_standings(
     // graph regardless of the requested conference/mode filter, then rank
     // every ranked program relative to the full universe so a team's rank
     // is the same whether the user is viewing SEC-only or all conferences.
-    let rpi_by_slug = standings::compute_rpi(&all_games);
-    let rank_by_slug: std::collections::HashMap<String, u32> = {
-        let mut pairs: Vec<(&String, &f64)> = rpi_by_slug.iter().collect();
-        // Best RPI ranks 1. Break ties on slug asc so the ranking is
-        // deterministic. Standard competition ranking (1, 2, 2, 4).
-        pairs.sort_by(|a, b| {
-            b.1.partial_cmp(a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.cmp(b.0))
-        });
-        let mut ranks = std::collections::HashMap::new();
-        let mut prev_rpi: Option<f64> = None;
-        let mut current_rank: u32 = 0;
-        for (i, (slug, rpi)) in pairs.into_iter().enumerate() {
-            let rank = match prev_rpi {
-                Some(p) if (p - *rpi).abs() < 1e-12 => current_rank,
-                _ => (i as u32) + 1,
-            };
-            ranks.insert(slug.clone(), rank);
-            current_rank = rank;
-            prev_rpi = Some(*rpi);
-        }
-        ranks
-    };
+    // Seed the RPI opponent lookup from the registry so games against
+    // programs whose schedule failed to ingest still count in OWP/OOWP.
+    let registry_seed: Vec<(&str, &str)> = registry
+        .iter()
+        .map(|p| (p.name.as_str(), p.slug.as_str()))
+        .collect();
+    let rpi_by_slug = standings::compute_rpi_seeded(&all_games, &registry_seed);
+    let rank_by_slug = standings::rank_by_slug(&rpi_by_slug);
 
     let mut games = all_games;
     if let Some(c) = conference.as_deref().filter(|c| !c.is_empty()) {
@@ -411,6 +426,7 @@ fn list_standings(
             program_name: p.name.clone(),
             conference: p.conference.clone(),
             rpi_rank: rank_by_slug.get(&p.slug).copied().unwrap_or(0),
+            has_schedule_data: false,
             ..Standing::default()
         });
     }
@@ -428,29 +444,98 @@ fn list_standings(
     Ok(standings)
 }
 
-/// Distinct conference slugs the app knows about, sorted.
+/// One conference the app knows about, with its display label.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConferenceEntry {
+    pub slug: String,
+    /// Short display label ("SEC", "ACC", "A-10"). Sourced from
+    /// `output/conferences.ndjson` when present; falls back to the raw
+    /// slug when the file is missing.
+    pub label: String,
+    /// Full formal name ("Southeastern Conference"). Empty when only
+    /// the slug is known.
+    pub full_name: String,
+}
+
+fn load_conference_labels() -> std::collections::HashMap<String, (String, String)> {
+    // slug → (label, full_name). Empty map when the file isn't present
+    // — the frontend falls back to a slug-based title-case.
+    let path = data_dir().join("conferences.ndjson");
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        return std::collections::HashMap::new();
+    };
+    let mut out = std::collections::HashMap::new();
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let slug = entry
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let short = entry
+            .get("short_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let full = entry
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !slug.is_empty() {
+            out.insert(slug, (short, full));
+        }
+    }
+    out
+}
+
+/// Every conference the app knows about, sorted alphabetically by
+/// display label so the dropdown reads naturally to a user scanning it.
 ///
 /// Prefers the program registry (every conference with at least one
 /// registered program shows up, even if no schedule ingest succeeded
 /// for it). Falls back to the schedule-data union when the registry
 /// isn't present.
 #[tauri::command]
-fn list_conferences() -> Result<Vec<String>, String> {
-    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+fn list_conferences() -> Result<Vec<ConferenceEntry>, String> {
+    let labels = load_conference_labels();
+    let mut slugs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for p in &load_program_registry() {
         if !p.conference.is_empty() {
-            seen.insert(p.conference.clone());
+            slugs.insert(p.conference.clone());
         }
     }
-    if seen.is_empty() {
+    if slugs.is_empty() {
         let games = load_games()?;
         for g in &games {
             if !g.conference.is_empty() {
-                seen.insert(g.conference.clone());
+                slugs.insert(g.conference.clone());
             }
         }
     }
-    Ok(seen.into_iter().collect())
+    let mut entries: Vec<ConferenceEntry> = slugs
+        .into_iter()
+        .map(|slug| {
+            let (label, full_name) = labels
+                .get(&slug)
+                .cloned()
+                .unwrap_or_else(|| (slug.clone(), String::new()));
+            let label = if label.is_empty() { slug.clone() } else { label };
+            ConferenceEntry {
+                slug,
+                label,
+                full_name,
+            }
+        })
+        .collect();
+    entries.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    Ok(entries)
 }
 
 /// One row in the conferences summary view.
@@ -476,31 +561,14 @@ pub struct ConferenceSummary {
 fn list_conference_summary() -> Result<Vec<ConferenceSummary>, String> {
     let all_games = load_games()?;
     let registry = load_program_registry();
-    let rpi_by_slug = standings::compute_rpi(&all_games);
-
-    // Rebuild the same rank_by_slug as list_standings so the numbers
-    // agree exactly (standard competition ranking, ties share a rank).
-    let rank_by_slug: std::collections::HashMap<String, u32> = {
-        let mut pairs: Vec<(&String, &f64)> = rpi_by_slug.iter().collect();
-        pairs.sort_by(|a, b| {
-            b.1.partial_cmp(a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.cmp(b.0))
-        });
-        let mut ranks = std::collections::HashMap::new();
-        let mut prev_rpi: Option<f64> = None;
-        let mut current_rank: u32 = 0;
-        for (i, (slug, rpi)) in pairs.into_iter().enumerate() {
-            let rank = match prev_rpi {
-                Some(p) if (p - *rpi).abs() < 1e-12 => current_rank,
-                _ => (i as u32) + 1,
-            };
-            ranks.insert(slug.clone(), rank);
-            current_rank = rank;
-            prev_rpi = Some(*rpi);
-        }
-        ranks
-    };
+    let registry_seed: Vec<(&str, &str)> = registry
+        .iter()
+        .map(|p| (p.name.as_str(), p.slug.as_str()))
+        .collect();
+    let rpi_by_slug = standings::compute_rpi_seeded(&all_games, &registry_seed);
+    // Share the ranking helper with ``list_standings`` so the RPI column
+    // and the "avg RPI rank" here can't drift apart.
+    let rank_by_slug = standings::rank_by_slug(&rpi_by_slug);
 
     // Group by conference and compute mean rank across ranked members.
     let mut by_conf: std::collections::HashMap<String, (usize, Vec<u32>)> =
@@ -595,10 +663,18 @@ fn list_roster(slug: String) -> Result<Vec<RosterEntry>, String> {
 
     // Stats are optional. Roster and stats parsers occasionally disagree on
     // the ``#`` prefix on jersey numbers (some WMT variants keep it,
-    // sidearm strips it, the WMT API returns the plain digit) — normalise
-    // both sides before joining.
+    // sidearm strips it, the WMT API returns the plain digit) and on
+    // leading zeros ("07" vs "7" for the same player) — normalise both
+    // sides before joining. When the value is a pure integer we round-
+    // trip through u32 to strip zero padding without touching non-numeric
+    // jerseys (some sites use "GK" or "TR").
     fn norm(j: &str) -> String {
-        j.trim_start_matches('#').trim().to_string()
+        let stripped = j.trim_start_matches('#').trim();
+        if let Ok(n) = stripped.parse::<u32>() {
+            n.to_string()
+        } else {
+            stripped.to_string()
+        }
     }
     let stats_path = stats_dir().join(format!("{slug}.ndjson"));
     let stats_by_jersey: HashMap<String, PlayerStats> = if stats_path.exists() {
@@ -935,6 +1011,28 @@ mod name_norm_tests {
         assert_eq!(n("Tennessee"), "tennessee");
         assert_eq!(n("Florida State"), "florida state");
         assert_eq!(n("Mississippi State"), "mississippi state");
+    }
+
+    #[test]
+    fn collapses_st_abbreviation() {
+        // Both the site's "Missouri St." and the registry's "Missouri State"
+        // must normalize to the same lookup key.
+        assert_eq!(n("Missouri St."), "missouri state");
+        assert_eq!(n("Missouri State"), "missouri state");
+        assert_eq!(n("Boise St"), "boise state");
+        assert_eq!(n("#7 Fresno St."), "fresno state");
+    }
+
+    #[test]
+    fn does_not_touch_st_in_other_positions() {
+        // Words that happen to start with "st" aren't the abbreviation.
+        assert_eq!(n("Stanford"), "stanford");
+        assert_eq!(n("Stony Brook"), "stony brook");
+        // Leading "St." means "Saint" (St. John's, St. Thomas) — leave it.
+        assert_eq!(n("St. John's"), "st. john's");
+        assert_eq!(n("St. Thomas"), "st. thomas");
+        // "St" as the sole name is left alone (no leading word to modify).
+        assert_eq!(n("St"), "st");
     }
 
     #[test]

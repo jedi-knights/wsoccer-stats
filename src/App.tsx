@@ -15,6 +15,17 @@ type Standing = {
   games_played: number;
   points: number;
   rpi_rank: number;
+  // False for zero-record stubs filled from the registry to represent a
+  // conference member whose schedule wasn't ingested — the numeric
+  // columns for such rows render as em-dashes so users can distinguish
+  // "no data" from "played 0 games in this view".
+  has_schedule_data: boolean;
+};
+
+type ConferenceEntry = {
+  slug: string;
+  label: string;
+  full_name: string;
 };
 
 type GameResult = {
@@ -79,53 +90,25 @@ type View =
   | { kind: "standings"; conference: string; tab: Tab }
   | { kind: "roster"; slug: string; name: string; fromConference: string; fromTab: Tab };
 
-const CONFERENCE_LABELS: Record<string, string> = {
-  acc: "ACC",
-  sec: "SEC",
-  big_ten: "Big Ten",
-  big_12: "Big 12",
-  west_coast: "WCC",
-  // Acronym-heavy conferences that don't title-case cleanly from the slug.
-  asun: "ASUN",
-  american_athletic: "AAC",
-  conference_usa: "C-USA",
-  maac: "MAAC",
-  mac: "MAC",
-  swac: "SWAC",
-  wac: "WAC",
-  pac_12: "Pac-12",
-  mountain_west: "Mountain West",
-  missouri_valley: "MVC",
-  atlantic_10: "A-10",
-  coastal_athletic: "CAA",
-  ohio_valley: "OVC",
-  summit_league: "Summit",
-  northeast: "NEC",
-  big_south: "Big South",
-  big_east: "Big East",
-  big_sky: "Big Sky",
-  big_west: "Big West",
-  sun_belt: "Sun Belt",
-  patriot_league: "Patriot",
-  ivy_league: "Ivy",
-  horizon_league: "Horizon",
-  america_east: "America East",
-  southern: "SoCon",
-  southland: "Southland",
-};
+// Conference labels come from the backend (sourced from the aip
+// registry's ``conferences.ndjson``). This module-level map is
+// populated once at app startup so all callers see the same labels
+// without threading them through props.
+let CONFERENCE_LABEL_MAP: Record<string, { label: string; full_name: string }> = {};
 
-const CONFERENCE_FULL_NAMES: Record<string, string> = {
-  acc: "Atlantic Coast Conference",
-  sec: "Southeastern Conference",
-  big_ten: "Big Ten Conference",
-  big_12: "Big 12 Conference",
-  west_coast: "West Coast Conference",
-};
+function setConferenceLabels(entries: ConferenceEntry[]): void {
+  const next: Record<string, { label: string; full_name: string }> = {};
+  for (const e of entries) {
+    next[e.slug] = { label: e.label, full_name: e.full_name };
+  }
+  CONFERENCE_LABEL_MAP = next;
+}
 
 function labelFor(conf: string): string {
-  if (conf in CONFERENCE_LABELS) return CONFERENCE_LABELS[conf];
-  // Title-case the slug for conferences without an explicit label:
-  // `atlantic_10` → `Atlantic 10`, `big_east` → `Big East`.
+  const hit = CONFERENCE_LABEL_MAP[conf];
+  if (hit) return hit.label;
+  // Fallback for a slug we haven't been told about (e.g., data older
+  // than the conferences.ndjson change): title-case the underscores.
   return conf
     .split("_")
     .map((w) => (w.length === 0 ? w : w[0].toUpperCase() + w.slice(1)))
@@ -133,7 +116,8 @@ function labelFor(conf: string): string {
 }
 
 function fullNameFor(conf: string): string {
-  return CONFERENCE_FULL_NAMES[conf] ?? labelFor(conf);
+  const hit = CONFERENCE_LABEL_MAP[conf];
+  return hit && hit.full_name ? hit.full_name : labelFor(conf);
 }
 
 // ---- sortable table helpers ----------------------------------------------
@@ -239,8 +223,11 @@ async function captureScreenshotToClipboard(): Promise<"ok" | "no-clipboard" | "
     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
     return "ok";
   } catch (e) {
-    if (String(e).includes("permission")) return "denied";
+    // Log unconditionally — the string return values are coarse
+    // (`denied` / `error`), so the console message is where debugging
+    // actually happens.
     console.error("screenshot failed:", e);
+    if (String(e).includes("permission")) return "denied";
     return "error";
   }
 }
@@ -494,14 +481,19 @@ function BrowsePage({
     fromTab: Tab
   ) => void;
 }) {
-  const [conferences, setConferences] = useState<string[]>([]);
+  const [conferences, setConferences] = useState<ConferenceEntry[]>([]);
   const [selected, setSelected] = useState<string>(initialConference);
   const [tab, setTab] = useState<Tab>(initialTab);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    invoke<string[]>("list_conferences")
-      .then(setConferences)
+    invoke<ConferenceEntry[]>("list_conferences")
+      .then((entries) => {
+        // Feed the module-level label map before any child component
+        // renders — labelFor/fullNameFor read from it synchronously.
+        setConferenceLabels(entries);
+        setConferences(entries);
+      })
       .catch((e) => setError(String(e)));
   }, []);
 
@@ -543,8 +535,8 @@ function BrowsePage({
             >
               <option value="">All ({conferences.length})</option>
               {conferences.map((c) => (
-                <option key={c} value={c}>
-                  {labelFor(c)}
+                <option key={c.slug} value={c.slug}>
+                  {c.label}
                 </option>
               ))}
             </select>
@@ -851,39 +843,56 @@ function StandingsPage({
             </tr>
           </thead>
           <tbody>
-            {sortedRows.map((s) => (
-              <tr key={s.program_slug}>
-                <td>
-                  <button
-                    className="linklike"
-                    onClick={() =>
-                      onOpenRoster(s.program_slug, s.program_name || s.program_slug)
-                    }
-                    title={`Roster for ${s.program_name || s.program_slug}`}
-                  >
-                    {s.program_name || s.program_slug}
-                  </button>
-                </td>
-                <td>
-                  <button
-                    className="linklike"
-                    onClick={() => onSelectConference(s.conference)}
-                    title={`Filter to ${fullNameFor(s.conference)}`}
-                  >
-                    {labelFor(s.conference)}
-                  </button>
-                </td>
-                <td title="RPI rank across every loaded program (1 = best)">
-                  {s.rpi_rank === 0 ? "—" : s.rpi_rank}
-                </td>
-                <td>{s.points}</td>
-                <td>{s.games_played}</td>
-                <td>{`${s.wins}-${s.losses}-${s.ties}`}</td>
-                <td>{s.goals_for}</td>
-                <td>{s.goals_against}</td>
-                <td>{s.goals_for - s.goals_against}</td>
-              </tr>
-            ))}
+            {sortedRows.map((s) => {
+              // Zero-record stubs (Oklahoma, Notre Dame, etc.) get
+              // em-dashes so users can distinguish "no data ingested"
+              // from "played 0 in this view". The Conf column and
+              // program link remain interactive on stub rows so users
+              // can still navigate.
+              const dash = "—";
+              const dashOr = <T,>(v: T) => (s.has_schedule_data ? String(v) : dash);
+              return (
+                <tr key={s.program_slug}>
+                  <td>
+                    <button
+                      className="linklike"
+                      onClick={() =>
+                        onOpenRoster(s.program_slug, s.program_name || s.program_slug)
+                      }
+                      title={
+                        s.has_schedule_data
+                          ? `Roster for ${s.program_name || s.program_slug}`
+                          : `Roster for ${s.program_name || s.program_slug} (no schedule ingested)`
+                      }
+                    >
+                      {s.program_name || s.program_slug}
+                    </button>
+                  </td>
+                  <td>
+                    <button
+                      className="linklike"
+                      onClick={() => onSelectConference(s.conference)}
+                      title={`Filter to ${fullNameFor(s.conference)}`}
+                    >
+                      {labelFor(s.conference)}
+                    </button>
+                  </td>
+                  <td title="RPI rank across every loaded program (1 = best)">
+                    {s.rpi_rank === 0 ? dash : s.rpi_rank}
+                  </td>
+                  <td>{dashOr(s.points)}</td>
+                  <td>{dashOr(s.games_played)}</td>
+                  <td>
+                    {s.has_schedule_data
+                      ? `${s.wins}-${s.losses}-${s.ties}`
+                      : dash}
+                  </td>
+                  <td>{dashOr(s.goals_for)}</td>
+                  <td>{dashOr(s.goals_against)}</td>
+                  <td>{dashOr(s.goals_for - s.goals_against)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

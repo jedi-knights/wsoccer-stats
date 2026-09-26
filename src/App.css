@@ -35,56 +35,76 @@
   -webkit-text-size-adjust: 100%;
 }
 
-/* Dark palette — applied when the user explicitly picks dark OR when
-   the OS prefers dark and the user hasn't overridden to light. */
-:root[data-theme="dark"],
-:root:not([data-theme="light"]):is([data-theme="dark"], [data-theme=""]) {
-  /* placeholder; real switch happens via media query + explicit selector below */
+/* Dark-palette source of truth — defined once on :root as private
+   ``--dark-*`` values, then referenced from both the explicit
+   ``data-theme="dark"`` selector AND the OS-preference media query.
+   Change a color here and both selectors update. */
+:root {
+  --dark-bg: #1c1c1c;
+  --dark-text: #f6f6f6;
+  --dark-text-muted: #bbb;
+  --dark-border: #333;
+  --dark-input-bg: #2a2a2a;
+  --dark-input-border: #555;
+  --dark-input-text: #f6f6f6;
+  --dark-header-bg: #2a2a2a;
+  --dark-header-hover: #333;
+  --dark-stripe: #232323;
+  --dark-hover: #2f3444;
+  --dark-link: #7ea6ff;
+  --dark-link-hover: #24c8db;
+  --dark-sort-arrow-muted: #555;
+  --dark-heading: #eee;
+  --dark-error-bg: #3b1a1a;
+  --dark-error-text: #ffdada;
+  --dark-error-border: #6b2323;
 }
 
+/* Explicit dark preference — user toggled the theme button. */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #1c1c1c;
-  --text: #f6f6f6;
-  --text-muted: #bbb;
-  --border: #333;
-  --input-bg: #2a2a2a;
-  --input-border: #555;
-  --input-text: #f6f6f6;
-  --header-bg: #2a2a2a;
-  --header-hover: #333;
-  --stripe: #232323;
-  --hover: #2f3444;
-  --link: #7ea6ff;
-  --link-hover: #24c8db;
-  --sort-arrow-muted: #555;
-  --heading: #eee;
-  --error-bg: #3b1a1a;
-  --error-text: #ffdada;
-  --error-border: #6b2323;
+  --bg: var(--dark-bg);
+  --text: var(--dark-text);
+  --text-muted: var(--dark-text-muted);
+  --border: var(--dark-border);
+  --input-bg: var(--dark-input-bg);
+  --input-border: var(--dark-input-border);
+  --input-text: var(--dark-input-text);
+  --header-bg: var(--dark-header-bg);
+  --header-hover: var(--dark-header-hover);
+  --stripe: var(--dark-stripe);
+  --hover: var(--dark-hover);
+  --link: var(--dark-link);
+  --link-hover: var(--dark-link-hover);
+  --sort-arrow-muted: var(--dark-sort-arrow-muted);
+  --heading: var(--dark-heading);
+  --error-bg: var(--dark-error-bg);
+  --error-text: var(--dark-error-text);
+  --error-border: var(--dark-error-border);
 }
 
+/* OS preference is dark AND user hasn't overridden to light. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --bg: #1c1c1c;
-    --text: #f6f6f6;
-    --text-muted: #bbb;
-    --border: #333;
-    --input-bg: #2a2a2a;
-    --input-border: #555;
-    --input-text: #f6f6f6;
-    --header-bg: #2a2a2a;
-    --header-hover: #333;
-    --stripe: #232323;
-    --hover: #2f3444;
-    --link: #7ea6ff;
-    --link-hover: #24c8db;
-    --sort-arrow-muted: #555;
-    --heading: #eee;
-    --error-bg: #3b1a1a;
-    --error-text: #ffdada;
-    --error-border: #6b2323;
+    --bg: var(--dark-bg);
+    --text: var(--dark-text);
+    --text-muted: var(--dark-text-muted);
+    --border: var(--dark-border);
+    --input-bg: var(--dark-input-bg);
+    --input-border: var(--dark-input-border);
+    --input-text: var(--dark-input-text);
+    --header-bg: var(--dark-header-bg);
+    --header-hover: var(--dark-header-hover);
+    --stripe: var(--dark-stripe);
+    --hover: var(--dark-hover);
+    --link: var(--dark-link);
+    --link-hover: var(--dark-link-hover);
+    --sort-arrow-muted: var(--dark-sort-arrow-muted);
+    --heading: var(--dark-heading);
+    --error-bg: var(--dark-error-bg);
+    --error-text: var(--dark-error-text);
+    --error-border: var(--dark-error-border);
   }
 }
 
