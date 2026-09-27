@@ -692,12 +692,12 @@ pub struct UpcomingMatch {
     pub kickoff_time: Option<String>,
     pub broadcast_channel: Option<String>,
     pub broadcast_url: Option<String>,
-    /// True when the game's date matches today (in the caller-provided
-    /// or system-clock local date) AND no result has been posted —
-    /// heuristic without kickoff-time parsing.
-    pub is_live: bool,
     /// Final score if the game already completed today (a Sat morning
-    /// game finished by afternoon).
+    /// game finished by afternoon). Liveness is evaluated on the
+    /// frontend against the moving wall clock — the backend just
+    /// serves the raw fields (`kickoff_time`, `result`, `date`) and
+    /// lets the caller decide whether the match window is currently
+    /// active.
     pub result: Option<GameResult>,
 }
 
@@ -746,7 +746,6 @@ fn list_todays_matches(today: String) -> Result<Vec<UpcomingMatch>, String> {
         let opp_key = normalize_team_name(&g.opponent);
         let opp_slug = name_to_slug.get(&opp_key).cloned();
         let opp_conf = name_to_conf.get(&opp_key).cloned().unwrap_or_default();
-        let is_live = g.date == today && g.result.is_none();
         rows.push(UpcomingMatch {
             program_slug: g.program_slug.clone(),
             program_name: g.program_name.clone(),
@@ -759,7 +758,6 @@ fn list_todays_matches(today: String) -> Result<Vec<UpcomingMatch>, String> {
             kickoff_time: g.kickoff_time.clone(),
             broadcast_channel: g.broadcast_channel.clone(),
             broadcast_url: g.broadcast_url.clone(),
-            is_live,
             result: g.result.clone(),
         });
     }
