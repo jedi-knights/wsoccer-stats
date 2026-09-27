@@ -87,10 +87,26 @@ pub(crate) fn normalize_team_name(name: &str) -> String {
         rest = stripped;
     }
     let lower = rest.to_lowercase();
+    // Strip leading "university of " / "univ. of " / "univ of ". Some
+    // schedules (Pepperdine's) write opponents as "University of
+    // Portland" while the registry name is just "Portland" — without
+    // this strip the conference lookup misses.
+    let lower = strip_university_of_prefix(&lower);
     // Collapse "St." → "State" so "Missouri St." matches "Missouri State".
     // Match whole words only: replace " st." and " st" at end-of-string
     // (case-insensitive, but ``lower`` is already lowercased).
     expand_st_abbreviation(&lower)
+}
+
+fn strip_university_of_prefix(s: &str) -> String {
+    for prefix in ["university of ", "univ. of ", "univ of "] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            if !rest.is_empty() {
+                return rest.to_string();
+            }
+        }
+    }
+    s.to_string()
 }
 
 fn expand_st_abbreviation(s: &str) -> String {
@@ -1146,6 +1162,25 @@ mod name_norm_tests {
         assert_eq!(n("Tennessee"), "tennessee");
         assert_eq!(n("Florida State"), "florida state");
         assert_eq!(n("Mississippi State"), "mississippi state");
+    }
+
+    #[test]
+    fn strips_university_of_prefix() {
+        // Pepperdine's schedule writes opponents as "University of X";
+        // the registry names are just "X". Both must normalize identically.
+        assert_eq!(n("University of Portland"), "portland");
+        assert_eq!(n("University of Southern California"), "southern california");
+        assert_eq!(n("Univ. of Denver"), "denver");
+        assert_eq!(n("Univ of Arizona"), "arizona");
+    }
+
+    #[test]
+    fn does_not_touch_state_universities() {
+        // "Portland State" is a distinct program from "Portland" — the
+        // "State" suffix must stay attached and the prefix strip must
+        // not eat it.
+        assert_eq!(n("Portland State"), "portland state");
+        assert_eq!(n("Oregon State"), "oregon state");
     }
 
     #[test]
