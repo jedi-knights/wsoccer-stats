@@ -107,7 +107,6 @@ type UpcomingMatch = {
   kickoff_time: string | null;
   broadcast_channel: string | null;
   broadcast_url: string | null;
-  is_live: boolean;
   result: GameResult | null;
 };
 
@@ -643,31 +642,77 @@ function BrowsePage({
 
 // ---- today --------------------------------------------------------------
 
-/// Local-tz `YYYY-MM-DD` — the Swedish locale happens to produce the
+/// Local-tz `YYYY-MM-DD`. The Swedish locale happens to produce the
 /// ISO format natively, which saves us doing tz math in the frontend
 /// or shipping a date library to the backend just for one string.
-function localTodayIso(): string {
-  return new Date().toLocaleDateString("sv-SE");
+function localTodayIso(d: Date = new Date()): string {
+  return d.toLocaleDateString("sv-SE");
 }
 
-/// Poll the backend for today+tomorrow's matches so the tab button can
-/// pulse a red dot when any of them is live. Shared with TodayPage so
-/// both stay in sync without a second fetch.
+/// Return a `Date` that refreshes every `pollMs` — components that
+/// depend on it (the live-match badge, the LIVE row tint) re-render
+/// as the clock advances, so at 5 AM a 7 PM kickoff correctly reads
+/// as not-live and flips at kickoff without a page reload.
+function useNow(pollMs: number): Date {
+  const [now, setNow] = useState<Date>(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), pollMs);
+    return () => window.clearInterval(id);
+  }, [pollMs]);
+  return now;
+}
+
+/// Parse a kickoff-time string like "7 p.m." / "7:30 PM" / "1 PM ET"
+/// into minutes-since-local-midnight. Returns null when unparseable
+/// (e.g. "TBA", "TBD"). Ignores any trailing timezone label — we
+/// assume the source publishes local kickoff, which is the standard
+/// convention.
+function parseKickoffMinutes(s: string): number | null {
+  const m = s.match(/^\s*(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)/i);
+  if (!m) return null;
+  let hour = parseInt(m[1], 10);
+  const minute = m[2] ? parseInt(m[2], 10) : 0;
+  const isPm = m[3][0].toLowerCase() === "p";
+  if (isPm && hour !== 12) hour += 12;
+  if (!isPm && hour === 12) hour = 0;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+/// Match window: kickoff → kickoff + 150 min (regulation 90 + halftime
+/// + stoppage + a bit of buffer for late-arriving results). Games with
+/// no kickoff time are never considered live to avoid the "everything
+/// scheduled today looks live at 5 AM" false positive.
+const MATCH_WINDOW_MINUTES = 150;
+
+function isMatchLive(m: UpcomingMatch, now: Date): boolean {
+  if (m.result) return false;
+  if (m.date !== localTodayIso(now)) return false;
+  if (!m.kickoff_time) return false;
+  const kickoff = parseKickoffMinutes(m.kickoff_time);
+  if (kickoff === null) return false;
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  return nowMinutes >= kickoff && nowMinutes <= kickoff + MATCH_WINDOW_MINUTES;
+}
+
+/// Poll the backend for today+tomorrow's matches. The `now` returned
+/// here refreshes every `pollMs` so callers can pass it into
+/// `isMatchLive` and get a fresh evaluation on every tick, even
+/// between backend refetches (which happen at the same cadence).
 function useUpcomingMatches(pollMs: number): {
   matches: UpcomingMatch[] | null;
-  liveCount: number;
+  now: Date;
   today: string;
   refresh: () => void;
 } {
   const [matches, setMatches] = useState<UpcomingMatch[] | null>(null);
-  const [today, setToday] = useState<string>(localTodayIso);
+  const now = useNow(pollMs);
+  const today = localTodayIso(now);
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((n) => n + 1), []);
 
   useEffect(() => {
-    const now = localTodayIso();
-    setToday(now);
-    invoke<UpcomingMatch[]>("list_todays_matches", { today: now })
+    invoke<UpcomingMatch[]>("list_todays_matches", { today: localTodayIso() })
       .then(setMatches)
       .catch(() => setMatches([]));
   }, [tick]);
@@ -677,12 +722,7 @@ function useUpcomingMatches(pollMs: number): {
     return () => window.clearInterval(id);
   }, [pollMs, refresh]);
 
-  const liveCount = useMemo(() => {
-    if (!matches) return 0;
-    return matches.filter((m) => m.is_live).length;
-  }, [matches]);
-
-  return { matches, liveCount, today, refresh };
+  return { matches, now, today, refresh };
 }
 
 function TodayTabButton({
@@ -692,7 +732,13 @@ function TodayTabButton({
   active: boolean;
   onClick: () => void;
 }) {
-  const { liveCount } = useUpcomingMatches(60_000);
+  // Poll every 60 s while the user is on other tabs — cheap enough for
+  // a background timer, fast enough that a kickoff is picked up within
+  // a minute of the match starting.
+  const { matches, now } = useUpcomingMatches(60_000);
+  const liveCount = matches
+    ? matches.filter((m) => isMatchLive(m, now)).length
+    : 0;
   return (
     <button
       role="tab"
@@ -717,7 +763,7 @@ function TodayPage({
 }: {
   onOpenRoster: (slug: string, name: string) => void;
 }) {
-  const { matches, today } = useUpcomingMatches(30_000);
+  const { matches, today, now } = useUpcomingMatches(30_000);
   const tomorrow = useMemo(() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
@@ -783,6 +829,7 @@ function TodayPage({
               {deduped
                 .filter((m) => m.date === d)
                 .map((m) => {
+                  const live = isMatchLive(m, now);
                   const venue =
                     m.home_away === "away"
                       ? "@"
@@ -791,13 +838,13 @@ function TodayPage({
                         : "vs";
                   const status = m.result
                     ? `${m.result.outcome} ${m.result.team_score}-${m.result.opponent_score}`
-                    : m.is_live
+                    : live
                       ? "LIVE"
                       : m.kickoff_time || "TBD";
                   return (
                     <tr
                       key={`${m.program_slug}-${m.opponent_slug ?? m.opponent_name}-${m.date}`}
-                      className={m.is_live ? "today-row-live" : undefined}
+                      className={live ? "today-row-live" : undefined}
                     >
                       <td>{m.kickoff_time || "—"}</td>
                       <td>
@@ -848,8 +895,11 @@ function TodayPage({
                         )}
                       </td>
                       <td>
-                        {m.is_live && <span className="live-badge">● LIVE</span>}
-                        {!m.is_live && status}
+                        {live ? (
+                          <span className="live-badge">● LIVE</span>
+                        ) : (
+                          status
+                        )}
                       </td>
                     </tr>
                   );
