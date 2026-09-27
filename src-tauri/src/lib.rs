@@ -673,6 +673,112 @@ fn list_head_to_head(conference: String) -> Result<Vec<H2HGame>, String> {
     Ok(rows)
 }
 
+/// One matchup rendered in the Today view — a game happening today
+/// or tomorrow, from a single team's perspective. The frontend
+/// deduplicates matchups between two known programs by preferring the
+/// home team's row so each game appears once.
+#[derive(Debug, Clone, Serialize)]
+pub struct UpcomingMatch {
+    pub program_slug: String,
+    pub program_name: String,
+    pub conference: String,
+    /// Opponent program slug when the name resolved via the registry.
+    /// None when the opponent isn't a D1 program we know about.
+    pub opponent_slug: Option<String>,
+    pub opponent_name: String,
+    pub opponent_conference: String,
+    pub date: String,
+    pub home_away: String,
+    pub kickoff_time: Option<String>,
+    pub broadcast_channel: Option<String>,
+    pub broadcast_url: Option<String>,
+    /// True when the game's date matches today (in the caller-provided
+    /// or system-clock local date) AND no result has been posted —
+    /// heuristic without kickoff-time parsing.
+    pub is_live: bool,
+    /// Final score if the game already completed today (a Sat morning
+    /// game finished by afternoon).
+    pub result: Option<GameResult>,
+}
+
+/// Return every game across all programs with a date in
+/// `[today, today+1]` where `today` is a `YYYY-MM-DD` string supplied
+/// by the caller (the frontend, which knows the user's local
+/// timezone). The frontend deduplicates so the same matchup between
+/// two known programs only renders once.
+#[tauri::command]
+fn list_todays_matches(today: String) -> Result<Vec<UpcomingMatch>, String> {
+    // Validate the caller-supplied date shape so a malformed string
+    // doesn't quietly return the entire schedule.
+    if today.len() != 10 || today.as_bytes()[4] != b'-' || today.as_bytes()[7] != b'-' {
+        return Err(format!("invalid today: expected YYYY-MM-DD, got {today:?}"));
+    }
+    let tomorrow = add_days_iso(&today, 1);
+    let all_games = load_games()?;
+    let registry = load_program_registry();
+
+    // Build name → (slug, conf) lookup the same way list_standings does
+    // so opponent resolution is consistent across views.
+    let mut name_to_slug: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut name_to_conf: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for g in &all_games {
+        if !g.program_name.is_empty() {
+            let k = normalize_team_name(&g.program_name);
+            name_to_slug.entry(k.clone()).or_insert_with(|| g.program_slug.clone());
+            if !g.conference.is_empty() {
+                name_to_conf.entry(k).or_insert_with(|| g.conference.clone());
+            }
+        }
+    }
+    for p in &registry {
+        let k = normalize_team_name(&p.name);
+        name_to_slug.entry(k.clone()).or_insert_with(|| p.slug.clone());
+        name_to_conf.entry(k).or_insert_with(|| p.conference.clone());
+    }
+
+    let mut rows: Vec<UpcomingMatch> = Vec::new();
+    for g in &all_games {
+        if g.date.as_str() < today.as_str() || g.date.as_str() > tomorrow.as_str() {
+            continue;
+        }
+        let opp_key = normalize_team_name(&g.opponent);
+        let opp_slug = name_to_slug.get(&opp_key).cloned();
+        let opp_conf = name_to_conf.get(&opp_key).cloned().unwrap_or_default();
+        let is_live = g.date == today && g.result.is_none();
+        rows.push(UpcomingMatch {
+            program_slug: g.program_slug.clone(),
+            program_name: g.program_name.clone(),
+            conference: g.conference.clone(),
+            opponent_slug: opp_slug,
+            opponent_name: g.opponent.clone(),
+            opponent_conference: opp_conf,
+            date: g.date.clone(),
+            home_away: g.home_away.clone(),
+            kickoff_time: g.kickoff_time.clone(),
+            broadcast_channel: g.broadcast_channel.clone(),
+            broadcast_url: g.broadcast_url.clone(),
+            is_live,
+            result: g.result.clone(),
+        });
+    }
+    // Sort by date, then kickoff time (nulls last), then program slug
+    // so the ordering is stable and same-time matches read alphabetically.
+    rows.sort_by(|a, b| {
+        a.date
+            .cmp(&b.date)
+            .then_with(|| match (&a.kickoff_time, &b.kickoff_time) {
+                (Some(x), Some(y)) => x.cmp(y),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| a.program_slug.cmp(&b.program_slug))
+    });
+    Ok(rows)
+}
+
 /// One row in the conferences summary view.
 #[derive(Debug, Clone, Serialize)]
 pub struct ConferenceSummary {
@@ -1251,6 +1357,7 @@ pub fn run() {
             list_conferences,
             list_conference_summary,
             list_head_to_head,
+            list_todays_matches,
             list_roster,
             list_schedule,
             list_leaders,

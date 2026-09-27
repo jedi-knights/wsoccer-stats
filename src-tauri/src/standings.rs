@@ -388,6 +388,7 @@ mod tests {
                 team_score: team,
                 opponent_score: opp,
             }),
+            ..Default::default()
         }
     }
 
@@ -401,6 +402,7 @@ mod tests {
             opponent: "someone".into(),
             home_away: "home".into(),
             result: None,
+            ..Default::default()
         }
     }
 
@@ -475,6 +477,7 @@ mod tests {
                 team_score: team,
                 opponent_score: opp,
             }),
+            ..Default::default()
         }
     }
 

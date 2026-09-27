@@ -93,7 +93,23 @@ type RefreshEvent =
   | { phase: "step"; index: number; total: number; result: RefreshResult }
   | { phase: "finished"; ok: number; total: number };
 
-type Tab = "conferences" | "standings" | "leaders";
+type Tab = "conferences" | "standings" | "leaders" | "today";
+
+type UpcomingMatch = {
+  program_slug: string;
+  program_name: string;
+  conference: string;
+  opponent_slug: string | null;
+  opponent_name: string;
+  opponent_conference: string;
+  date: string;
+  home_away: string;
+  kickoff_time: string | null;
+  broadcast_channel: string | null;
+  broadcast_url: string | null;
+  is_live: boolean;
+  result: GameResult | null;
+};
 
 type ConferenceSummary = {
   conference: string;
@@ -571,8 +587,12 @@ function BrowsePage({
           >
             Leaders
           </button>
+          <TodayTabButton
+            active={tab === "today"}
+            onClick={() => setTab("today")}
+          />
         </div>
-        {tab !== "conferences" && (
+        {tab !== "conferences" && tab !== "today" && (
           <label className="filter" title="Conference filter">
             Conference:{" "}
             <select
@@ -601,6 +621,10 @@ function BrowsePage({
             setTab("standings");
           }}
         />
+      ) : tab === "today" ? (
+        <TodayPage
+          onOpenRoster={(slug, name) => onOpenRoster(slug, name, selected, tab)}
+        />
       ) : tab === "standings" ? (
         <StandingsPage
           conference={selected}
@@ -613,6 +637,227 @@ function BrowsePage({
           onOpenRoster={(slug, name) => onOpenRoster(slug, name, selected, tab)}
         />
       )}
+    </main>
+  );
+}
+
+// ---- today --------------------------------------------------------------
+
+/// Local-tz `YYYY-MM-DD` — the Swedish locale happens to produce the
+/// ISO format natively, which saves us doing tz math in the frontend
+/// or shipping a date library to the backend just for one string.
+function localTodayIso(): string {
+  return new Date().toLocaleDateString("sv-SE");
+}
+
+/// Poll the backend for today+tomorrow's matches so the tab button can
+/// pulse a red dot when any of them is live. Shared with TodayPage so
+/// both stay in sync without a second fetch.
+function useUpcomingMatches(pollMs: number): {
+  matches: UpcomingMatch[] | null;
+  liveCount: number;
+  today: string;
+  refresh: () => void;
+} {
+  const [matches, setMatches] = useState<UpcomingMatch[] | null>(null);
+  const [today, setToday] = useState<string>(localTodayIso);
+  const [tick, setTick] = useState(0);
+  const refresh = useCallback(() => setTick((n) => n + 1), []);
+
+  useEffect(() => {
+    const now = localTodayIso();
+    setToday(now);
+    invoke<UpcomingMatch[]>("list_todays_matches", { today: now })
+      .then(setMatches)
+      .catch(() => setMatches([]));
+  }, [tick]);
+
+  useEffect(() => {
+    const id = window.setInterval(refresh, pollMs);
+    return () => window.clearInterval(id);
+  }, [pollMs, refresh]);
+
+  const liveCount = useMemo(() => {
+    if (!matches) return 0;
+    return matches.filter((m) => m.is_live).length;
+  }, [matches]);
+
+  return { matches, liveCount, today, refresh };
+}
+
+function TodayTabButton({
+  active,
+  onClick,
+}: {
+  active: boolean;
+  onClick: () => void;
+}) {
+  const { liveCount } = useUpcomingMatches(60_000);
+  return (
+    <button
+      role="tab"
+      aria-selected={active}
+      className={`tab ${active ? "tab-active" : ""}`}
+      onClick={onClick}
+    >
+      Today
+      {liveCount > 0 && (
+        <span
+          className="live-dot"
+          title={`${liveCount} match${liveCount === 1 ? "" : "es"} in progress`}
+          aria-label={`${liveCount} live match${liveCount === 1 ? "" : "es"}`}
+        />
+      )}
+    </button>
+  );
+}
+
+function TodayPage({
+  onOpenRoster,
+}: {
+  onOpenRoster: (slug: string, name: string) => void;
+}) {
+  const { matches, today } = useUpcomingMatches(30_000);
+  const tomorrow = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toLocaleDateString("sv-SE");
+  }, []);
+
+  // Deduplicate two-known-team matchups: prefer the home team's row so
+  // each unique game appears once.
+  const deduped = useMemo(() => {
+    if (!matches) return matches;
+    // Key by sorted pair of slugs when both known. Prefer the row
+    // where the OWNER is the home team; if neither is home (both away
+    // shouldn't happen), keep the first encountered.
+    const byPair = new Map<string, UpcomingMatch>();
+    const singles: UpcomingMatch[] = [];
+    for (const m of matches) {
+      if (!m.opponent_slug) {
+        singles.push(m);
+        continue;
+      }
+      const key = [m.program_slug, m.opponent_slug].sort().join("|") + "|" + m.date;
+      const existing = byPair.get(key);
+      const isHome = m.home_away === "home";
+      if (!existing || (isHome && existing.home_away !== "home")) {
+        byPair.set(key, m);
+      }
+    }
+    return [...byPair.values(), ...singles];
+  }, [matches]);
+
+  if (matches === null) return <main className="container"><p>Loading…</p></main>;
+  if (!deduped || deduped.length === 0) {
+    return (
+      <main className="container">
+        <h2 className="section-heading">Today &amp; Tomorrow</h2>
+        <p>No games scheduled between {today} and {tomorrow}.</p>
+      </main>
+    );
+  }
+
+  const dates = Array.from(new Set(deduped.map((m) => m.date))).sort();
+  const label = (d: string) => (d === today ? "Today" : d === tomorrow ? "Tomorrow" : d);
+
+  return (
+    <main className="container">
+      {dates.map((d) => (
+        <section key={d} className="today-section">
+          <h2 className="section-heading">
+            {label(d)}
+            <span className="today-date-suffix"> · {d}</span>
+          </h2>
+          <table className="today-matches">
+            <thead>
+              <tr>
+                <th>Kickoff</th>
+                <th>Matchup</th>
+                <th>Conf</th>
+                <th>Broadcast</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {deduped
+                .filter((m) => m.date === d)
+                .map((m) => {
+                  const venue =
+                    m.home_away === "away"
+                      ? "@"
+                      : m.home_away === "neutral"
+                        ? "vs (n)"
+                        : "vs";
+                  const status = m.result
+                    ? `${m.result.outcome} ${m.result.team_score}-${m.result.opponent_score}`
+                    : m.is_live
+                      ? "LIVE"
+                      : m.kickoff_time || "TBD";
+                  return (
+                    <tr
+                      key={`${m.program_slug}-${m.opponent_slug ?? m.opponent_name}-${m.date}`}
+                      className={m.is_live ? "today-row-live" : undefined}
+                    >
+                      <td>{m.kickoff_time || "—"}</td>
+                      <td>
+                        <button
+                          className="linklike"
+                          onClick={() =>
+                            onOpenRoster(
+                              m.program_slug,
+                              m.program_name || m.program_slug,
+                            )
+                          }
+                        >
+                          {m.program_name || m.program_slug}
+                        </button>
+                        {" "}
+                        <span className="today-venue">{venue}</span>{" "}
+                        {m.opponent_slug ? (
+                          <button
+                            className="linklike"
+                            onClick={() =>
+                              onOpenRoster(m.opponent_slug!, m.opponent_name)
+                            }
+                          >
+                            {m.opponent_name}
+                          </button>
+                        ) : (
+                          <span>{m.opponent_name}</span>
+                        )}
+                      </td>
+                      <td>
+                        {m.conference && labelFor(m.conference)}
+                        {m.opponent_conference &&
+                          m.opponent_conference !== m.conference &&
+                          ` / ${labelFor(m.opponent_conference)}`}
+                      </td>
+                      <td>
+                        {m.broadcast_url ? (
+                          <a
+                            className="external-link"
+                            href={m.broadcast_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {m.broadcast_channel || "Watch"} ↗
+                          </a>
+                        ) : (
+                          m.broadcast_channel || "—"
+                        )}
+                      </td>
+                      <td>
+                        {m.is_live && <span className="live-badge">● LIVE</span>}
+                        {!m.is_live && status}
+                      </td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
+        </section>
+      ))}
     </main>
   );
 }
