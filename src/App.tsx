@@ -69,6 +69,8 @@ type RosterEntry = {
   minutes: number | null;
   goals: number | null;
   assists: number | null;
+  shots: number | null;
+  shots_on_goal: number | null;
 };
 
 type H2HGame = {
@@ -2145,10 +2147,49 @@ type RosterSortKey =
   | "games_started"
   | "minutes"
   | "goals"
-  | "assists";
+  | "assists"
+  | "shots"
+  | "shots_missed"
+  | "shots_on_goal"
+  | "shots_on_goal_pct"
+  | "shots_per_min"
+  | "sog_per_min"
+  | "missed_per_min"
+  | "goals_per_min";
 
 function fmtStat(n: number | null): string {
   return n === null ? "—" : String(n);
+}
+
+/// Format shots-on-goal as a percentage of total shots. Null when
+/// either input is missing or shots == 0 (no attempts to normalize
+/// against).
+function fmtSogPct(sh: number | null, sog: number | null): string {
+  if (sh === null || sog === null || sh === 0) return "—";
+  return `${((sog / sh) * 100).toFixed(1)}%`;
+}
+
+/// Derived count of shots that missed the frame (total shots minus
+/// shots on goal). Null when either input is missing.
+function shotsMissed(sh: number | null, sog: number | null): number | null {
+  if (sh === null || sog === null) return null;
+  return Math.max(0, sh - sog);
+}
+
+/// Per-minute-played rate helper. Rendered as a small decimal
+/// ("0.038") — a full match is 90 min so per-90 would blow up decimals
+/// less, but per-minute keeps the unit label short and comparable
+/// across whatever MIN totals players actually have.
+function fmtPerMin(numerator: number | null, minutes: number | null): string {
+  if (numerator === null || minutes === null || minutes === 0) return "—";
+  return (numerator / minutes).toFixed(3);
+}
+
+/// Same but exposes the raw ratio for sort. Null when the ratio is
+/// undefined (missing input or zero minutes).
+function perMin(numerator: number | null, minutes: number | null): number | null {
+  if (numerator === null || minutes === null || minutes === 0) return null;
+  return numerator / minutes;
 }
 
 // ---- form timeline ------------------------------------------------------
@@ -2249,9 +2290,46 @@ function RosterPage({
         const n = parseInt(row.jersey_number, 10);
         return Number.isFinite(n) ? n : row.jersey_number;
       }
+      // Derived columns aren't on the RosterEntry directly. Nulls
+      // (missing data / zero minutes) sort last regardless of direction.
+      const nullSort = () => (sort?.dir === "desc" ? -Infinity : Infinity);
+      if (key === "shots_missed") {
+        const v = shotsMissed(row.shots, row.shots_on_goal);
+        return v === null ? nullSort() : v;
+      }
+      if (key === "shots_on_goal_pct") {
+        if (row.shots === null || row.shots_on_goal === null || row.shots === 0) {
+          return nullSort();
+        }
+        return row.shots_on_goal / row.shots;
+      }
+      if (key === "shots_per_min") {
+        const v = perMin(row.shots, row.minutes);
+        return v === null ? nullSort() : v;
+      }
+      if (key === "sog_per_min") {
+        const v = perMin(row.shots_on_goal, row.minutes);
+        return v === null ? nullSort() : v;
+      }
+      if (key === "missed_per_min") {
+        const v = perMin(shotsMissed(row.shots, row.shots_on_goal), row.minutes);
+        return v === null ? nullSort() : v;
+      }
+      if (key === "goals_per_min") {
+        const v = perMin(row.goals, row.minutes);
+        return v === null ? nullSort() : v;
+      }
       // Numeric stat columns: nulls sort last regardless of direction.
       // Send Infinity so null > any real number, then invert if desc.
-      const v = row[key];
+      const v = row[key as Exclude<
+        RosterSortKey,
+        | "shots_missed"
+        | "shots_on_goal_pct"
+        | "shots_per_min"
+        | "sog_per_min"
+        | "missed_per_min"
+        | "goals_per_min"
+      >];
       if (v === null) return sort?.dir === "desc" ? -Infinity : Infinity;
       return v as number | string;
     });
@@ -2358,6 +2436,54 @@ function RosterPage({
                 sort={sort}
                 onToggle={toggleSort}
               />
+              <SortHeader
+                label="SH"
+                sortKey="shots"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+              <SortHeader
+                label="M"
+                sortKey="shots_missed"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+              <SortHeader
+                label="SOG"
+                sortKey="shots_on_goal"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+              <SortHeader
+                label="SOG%"
+                sortKey="shots_on_goal_pct"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+              <SortHeader
+                label="SH/min"
+                sortKey="shots_per_min"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+              <SortHeader
+                label="SOG/min"
+                sortKey="sog_per_min"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+              <SortHeader
+                label="M/min"
+                sortKey="missed_per_min"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+              <SortHeader
+                label="G/min"
+                sortKey="goals_per_min"
+                sort={sort}
+                onToggle={toggleSort}
+              />
             </tr>
           </thead>
           <tbody>
@@ -2374,6 +2500,19 @@ function RosterPage({
                 <td>{fmtStat(p.minutes)}</td>
                 <td>{fmtStat(p.goals)}</td>
                 <td>{fmtStat(p.assists)}</td>
+                <td>{fmtStat(p.shots)}</td>
+                <td>{fmtStat(shotsMissed(p.shots, p.shots_on_goal))}</td>
+                <td>{fmtStat(p.shots_on_goal)}</td>
+                <td>{fmtSogPct(p.shots, p.shots_on_goal)}</td>
+                <td>{fmtPerMin(p.shots, p.minutes)}</td>
+                <td>{fmtPerMin(p.shots_on_goal, p.minutes)}</td>
+                <td>
+                  {fmtPerMin(
+                    shotsMissed(p.shots, p.shots_on_goal),
+                    p.minutes,
+                  )}
+                </td>
+                <td>{fmtPerMin(p.goals, p.minutes)}</td>
               </tr>
             ))}
           </tbody>
