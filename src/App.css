@@ -444,6 +444,14 @@ table.today-matches td {
   border-bottom: 1px solid var(--border);
 }
 
+/* Kickoff, conference, broadcast, and status columns stay on one line
+   — the localized kickoff string ("6:00 PM CDT") especially must not
+   wrap. Matchup column stays wrappable since team names can be long. */
+table.today-matches td:not(:nth-child(2)),
+table.today-matches th:not(:nth-child(2)) {
+  white-space: nowrap;
+}
+
 table.today-matches th {
   font-size: 0.8rem;
   text-transform: uppercase;
