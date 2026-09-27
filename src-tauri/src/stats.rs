@@ -22,6 +22,15 @@ pub struct PlayerStats {
     pub minutes: u32,
     pub goals: u32,
     pub assists: u32,
+    /// Total shot attempts. Older NDJSON produced before this field
+    /// was added loads as 0 via ``#[serde(default)]``.
+    #[serde(default)]
+    pub shots: u32,
+    /// Shots on goal — subset of `shots` that hit the frame. The
+    /// frontend derives missed = shots - shots_on_goal and
+    /// SOG% = shots_on_goal / shots for display.
+    #[serde(default)]
+    pub shots_on_goal: u32,
 }
 
 /// Read one program's stats NDJSON into a `Vec<PlayerStats>`.

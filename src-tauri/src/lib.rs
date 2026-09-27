@@ -955,6 +955,8 @@ pub struct RosterEntry {
     pub minutes: Option<u32>,
     pub goals: Option<u32>,
     pub assists: Option<u32>,
+    pub shots: Option<u32>,
+    pub shots_on_goal: Option<u32>,
 }
 
 fn validate_slug(slug: &str) -> Result<(), String> {
@@ -1022,6 +1024,8 @@ fn list_roster(slug: String) -> Result<Vec<RosterEntry>, String> {
                 minutes: s.map(|s| s.minutes),
                 goals: s.map(|s| s.goals),
                 assists: s.map(|s| s.assists),
+                shots: s.map(|s| s.shots),
+                shots_on_goal: s.map(|s| s.shots_on_goal),
             }
         })
         .collect();
