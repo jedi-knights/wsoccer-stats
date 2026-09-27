@@ -2152,6 +2152,7 @@ type RosterSortKey =
   | "shots_missed"
   | "shots_on_goal"
   | "shots_on_goal_pct"
+  | "shots_missed_pct"
   | "shots_per_min"
   | "sog_per_min"
   | "missed_per_min"
@@ -2167,6 +2168,14 @@ function fmtStat(n: number | null): string {
 function fmtSogPct(sh: number | null, sog: number | null): string {
   if (sh === null || sog === null || sh === 0) return "—";
   return `${((sog / sh) * 100).toFixed(1)}%`;
+}
+
+/// Format missed shots as a percentage of total shots. Companion to
+/// fmtSogPct so the two ratios sum to 100% and users can read the
+/// balance between accurate and off-target attempts.
+function fmtMissedPct(sh: number | null, sog: number | null): string {
+  if (sh === null || sog === null || sh === 0) return "—";
+  return `${(((sh - sog) / sh) * 100).toFixed(1)}%`;
 }
 
 /// Derived count of shots that missed the frame (total shots minus
@@ -2303,6 +2312,12 @@ function RosterPage({
         }
         return row.shots_on_goal / row.shots;
       }
+      if (key === "shots_missed_pct") {
+        if (row.shots === null || row.shots_on_goal === null || row.shots === 0) {
+          return nullSort();
+        }
+        return (row.shots - row.shots_on_goal) / row.shots;
+      }
       if (key === "shots_per_min") {
         const v = perMin(row.shots, row.minutes);
         return v === null ? nullSort() : v;
@@ -2325,6 +2340,7 @@ function RosterPage({
         RosterSortKey,
         | "shots_missed"
         | "shots_on_goal_pct"
+        | "shots_missed_pct"
         | "shots_per_min"
         | "sog_per_min"
         | "missed_per_min"
@@ -2461,6 +2477,12 @@ function RosterPage({
                 onToggle={toggleSort}
               />
               <SortHeader
+                label="M%"
+                sortKey="shots_missed_pct"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+              <SortHeader
                 label="SH/min"
                 sortKey="shots_per_min"
                 sort={sort}
@@ -2504,6 +2526,7 @@ function RosterPage({
                 <td>{fmtStat(shotsMissed(p.shots, p.shots_on_goal))}</td>
                 <td>{fmtStat(p.shots_on_goal)}</td>
                 <td>{fmtSogPct(p.shots, p.shots_on_goal)}</td>
+                <td>{fmtMissedPct(p.shots, p.shots_on_goal)}</td>
                 <td>{fmtPerMin(p.shots, p.minutes)}</td>
                 <td>{fmtPerMin(p.shots_on_goal, p.minutes)}</td>
                 <td>
