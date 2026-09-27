@@ -568,6 +568,10 @@ function BrowsePage({
     <main className="container">
       <header className="page-header">
         <div className="tabs" role="tablist">
+          <TodayTabButton
+            active={tab === "today"}
+            onClick={() => setTab("today")}
+          />
           <button
             role="tab"
             aria-selected={tab === "conferences"}
@@ -592,10 +596,6 @@ function BrowsePage({
           >
             Leaders
           </button>
-          <TodayTabButton
-            active={tab === "today"}
-            onClick={() => setTab("today")}
-          />
         </div>
         {tab !== "conferences" && tab !== "today" && (
           <label className="filter" title="Conference filter">
