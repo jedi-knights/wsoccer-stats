@@ -394,6 +394,77 @@ table.leaders th {
   background: color-mix(in srgb, var(--link) 12%, transparent);
 }
 
+/* Live indicator — pulsing red dot on the Today tab button when any
+   match is in progress, plus a matching badge inside the Today table
+   for individual live rows. */
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e53935;
+  margin-left: 6px;
+  vertical-align: middle;
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(1.25); }
+}
+
+.live-badge {
+  color: #e53935;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.05em;
+}
+
+.today-section {
+  margin-bottom: 24px;
+}
+
+.today-date-suffix {
+  color: var(--text-muted);
+  font-weight: normal;
+  font-size: 0.85rem;
+  margin-left: 6px;
+}
+
+table.today-matches {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+table.today-matches th,
+table.today-matches td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+table.today-matches th {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+  background: var(--header-bg);
+}
+
+table.today-matches tbody tr:nth-child(even) {
+  background: var(--stripe);
+}
+
+.today-row-live {
+  background: color-mix(in srgb, #e53935 8%, transparent) !important;
+}
+
+.today-venue {
+  color: var(--text-muted);
+  margin: 0 2px;
+}
+
 /* Head-to-head matrix — square W-L-T grid. Wrapper is horizontally
    scrollable so wide conferences (18-team Big Ten) don't push the
    layout wider than the container. Sits inside a .chart-block so

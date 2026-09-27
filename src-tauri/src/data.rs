@@ -17,7 +17,7 @@ pub struct GameResult {
     pub opponent_score: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Game {
     pub program_slug: String,
     /// Display name for the program (e.g. "North Carolina"). Empty string
@@ -33,6 +33,18 @@ pub struct Game {
     pub opponent: String,
     pub home_away: String, // "home", "away", or "neutral"
     pub result: Option<GameResult>,
+    /// Kickoff time as printed on the source page (e.g. "7 p.m.",
+    /// "TBA"). None when not extracted or the game is already
+    /// complete. Older NDJSON produced before this field existed loads
+    /// with `None` thanks to `#[serde(default)]`.
+    #[serde(default)]
+    pub kickoff_time: Option<String>,
+    /// Broadcast / streaming channel name (e.g. "ACCN", "SECN+").
+    #[serde(default)]
+    pub broadcast_channel: Option<String>,
+    /// Direct URL to the live stream when the schedule exposes one.
+    #[serde(default)]
+    pub broadcast_url: Option<String>,
 }
 
 /// Parse a single NDJSON line into a `Game`.
