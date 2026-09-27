@@ -107,6 +107,12 @@ type UpcomingMatch = {
   kickoff_time: string | null;
   broadcast_channel: string | null;
   broadcast_url: string | null;
+  /// IANA timezone name for the schedule owner (e.g.
+  /// "America/New_York"). Empty when the state isn't in the backend's
+  /// lookup. Used to convert `kickoff_time` (a wall-clock string like
+  /// "7 p.m." published in the school's local time) into an epoch we
+  /// can format in the user's local tz.
+  program_tz: string;
   result: GameResult | null;
 };
 
@@ -663,11 +669,11 @@ function useNow(pollMs: number): Date {
 }
 
 /// Parse a kickoff-time string like "7 p.m." / "7:30 PM" / "1 PM ET"
-/// into minutes-since-local-midnight. Returns null when unparseable
-/// (e.g. "TBA", "TBD"). Ignores any trailing timezone label — we
-/// assume the source publishes local kickoff, which is the standard
-/// convention.
-function parseKickoffMinutes(s: string): number | null {
+/// into `{ hour, minute }` (24-hour). Returns null when unparseable
+/// (e.g. "TBA", "TBD"). Any trailing timezone label is ignored — the
+/// wall clock is interpreted in the schedule owner's `program_tz`
+/// downstream.
+function parseKickoffClock(s: string): { hour: number; minute: number } | null {
   const m = s.match(/^\s*(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)/i);
   if (!m) return null;
   let hour = parseInt(m[1], 10);
@@ -676,23 +682,82 @@ function parseKickoffMinutes(s: string): number | null {
   if (isPm && hour !== 12) hour += 12;
   if (!isPm && hour === 12) hour = 0;
   if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-  return hour * 60 + minute;
+  return { hour, minute };
+}
+
+/// Convert a wall-clock (year, month, day, hour, minute) understood to
+/// be IN the given IANA timezone into an epoch ms. JS's `Date` doesn't
+/// accept an IANA tz on construction, so we use the standard "guess
+/// the UTC, ask Intl what wall clock that produces in the target tz,
+/// correct for the diff" trick.
+function wallClockInTzToEpoch(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  iana: string,
+): number {
+  const utcGuess = Date.UTC(year, month - 1, day, hour, minute);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: iana,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(utcGuess));
+  const wall: Record<string, string> = {};
+  for (const p of parts) wall[p.type] = p.value;
+  const wallAsIfUtc = Date.UTC(
+    parseInt(wall.year),
+    parseInt(wall.month) - 1,
+    parseInt(wall.day),
+    parseInt(wall.hour),
+    parseInt(wall.minute),
+  );
+  // `wallAsIfUtc` is where the target-tz clock is at `utcGuess`.
+  // Difference is the tz offset; add it back to hit the wall clock we
+  // actually wanted.
+  return utcGuess + (utcGuess - wallAsIfUtc);
+}
+
+/// Resolve a match's kickoff to an epoch (ms since 1970) using the
+/// schedule owner's home timezone. Returns null when the game has no
+/// kickoff time, the string is unparseable, or the tz isn't known.
+function resolveKickoffEpoch(m: UpcomingMatch): number | null {
+  if (!m.kickoff_time || !m.program_tz) return null;
+  const hm = parseKickoffClock(m.kickoff_time);
+  if (!hm) return null;
+  const [y, mo, d] = m.date.split("-").map((s) => parseInt(s, 10));
+  if (!y || !mo || !d) return null;
+  return wallClockInTzToEpoch(y, mo, d, hm.hour, hm.minute, m.program_tz);
+}
+
+/// Format a kickoff epoch in the user's local timezone. Includes a
+/// short tz label ("6:00 PM CDT") so users can see the conversion
+/// happened.
+function formatKickoffLocal(epochMs: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(new Date(epochMs));
 }
 
 /// Match window: kickoff → kickoff + 150 min (regulation 90 + halftime
 /// + stoppage + a bit of buffer for late-arriving results). Games with
-/// no kickoff time are never considered live to avoid the "everything
-/// scheduled today looks live at 5 AM" false positive.
-const MATCH_WINDOW_MINUTES = 150;
+/// no resolvable kickoff epoch are never considered live to avoid the
+/// "everything scheduled today looks live at 5 AM" false positive.
+const MATCH_WINDOW_MS = 150 * 60_000;
 
 function isMatchLive(m: UpcomingMatch, now: Date): boolean {
   if (m.result) return false;
-  if (m.date !== localTodayIso(now)) return false;
-  if (!m.kickoff_time) return false;
-  const kickoff = parseKickoffMinutes(m.kickoff_time);
+  const kickoff = resolveKickoffEpoch(m);
   if (kickoff === null) return false;
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  return nowMinutes >= kickoff && nowMinutes <= kickoff + MATCH_WINDOW_MINUTES;
+  const nowMs = now.getTime();
+  return nowMs >= kickoff && nowMs <= kickoff + MATCH_WINDOW_MS;
 }
 
 /// Poll the backend for today+tomorrow's matches. The `now` returned
@@ -830,6 +895,10 @@ function TodayPage({
                 .filter((m) => m.date === d)
                 .map((m) => {
                   const live = isMatchLive(m, now);
+                  const kickoffEpoch = resolveKickoffEpoch(m);
+                  const kickoffLocal = kickoffEpoch
+                    ? formatKickoffLocal(kickoffEpoch)
+                    : m.kickoff_time || "TBD";
                   const venue =
                     m.home_away === "away"
                       ? "@"
@@ -840,13 +909,13 @@ function TodayPage({
                     ? `${m.result.outcome} ${m.result.team_score}-${m.result.opponent_score}`
                     : live
                       ? "LIVE"
-                      : m.kickoff_time || "TBD";
+                      : "Upcoming";
                   return (
                     <tr
                       key={`${m.program_slug}-${m.opponent_slug ?? m.opponent_name}-${m.date}`}
                       className={live ? "today-row-live" : undefined}
                     >
-                      <td>{m.kickoff_time || "—"}</td>
+                      <td>{kickoffLocal}</td>
                       <td>
                         <button
                           className="linklike"

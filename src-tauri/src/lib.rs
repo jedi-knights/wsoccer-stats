@@ -264,6 +264,10 @@ struct RegistryProgram {
     slug: String,
     name: String,
     conference: String,
+    /// Two-letter state (or "dc") from the aip registry. Used to
+    /// derive the school's IANA timezone so kickoff strings can be
+    /// converted to the user's local time.
+    state: String,
 }
 
 /// Load `output/programs.ndjson` from the data dir, silently returning
@@ -284,6 +288,11 @@ fn load_program_registry() -> Vec<RegistryProgram> {
             let slug = entry.get("slug")?.as_str()?.to_string();
             let name = entry.get("name")?.as_str()?.to_string();
             let conference = entry.get("conference")?.as_str()?.to_string();
+            let state = entry
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if slug.is_empty() || name.is_empty() || conference.is_empty() {
                 return None;
             }
@@ -291,6 +300,7 @@ fn load_program_registry() -> Vec<RegistryProgram> {
                 slug,
                 name,
                 conference,
+                state,
             })
         })
         .collect()
@@ -692,6 +702,12 @@ pub struct UpcomingMatch {
     pub kickoff_time: Option<String>,
     pub broadcast_channel: Option<String>,
     pub broadcast_url: Option<String>,
+    /// IANA timezone of the schedule owner's home state (e.g.
+    /// "America/New_York"). Kickoff strings on athletics sites are
+    /// published in the school's local time; the frontend uses this
+    /// to convert them to the user's local tz. Empty string when the
+    /// state isn't in our lookup table.
+    pub program_tz: String,
     /// Final score if the game already completed today (a Sat morning
     /// game finished by afternoon). Liveness is evaluated on the
     /// frontend against the moving wall clock — the backend just
@@ -699,6 +715,39 @@ pub struct UpcomingMatch {
     /// lets the caller decide whether the match window is currently
     /// active.
     pub result: Option<GameResult>,
+}
+
+/// Map a two-letter US state (or "dc") to the IANA timezone name that
+/// covers the vast majority of that state's population. States that
+/// span multiple timezones (Indiana, Kentucky, Tennessee, Kansas,
+/// Nebraska, North/South Dakota, Idaho, Oregon, Michigan's Upper
+/// Peninsula, and Arizona-with-Navajo) are mapped to their most
+/// populous zone — acceptable trade-off since we only need one
+/// conversion per school and the D1 women's soccer programs happen
+/// to all sit in the majority zone for their state.
+fn state_to_iana_tz(state: &str) -> &'static str {
+    match state.to_lowercase().as_str() {
+        // Eastern
+        "ct" | "de" | "dc" | "fl" | "ga" | "in" | "ky" | "me" | "md"
+        | "ma" | "mi" | "nh" | "nj" | "ny" | "nc" | "oh" | "pa" | "ri"
+        | "sc" | "vt" | "va" | "wv" => "America/New_York",
+        // Central
+        "al" | "ar" | "ia" | "il" | "la" | "mn" | "ms" | "mo" | "ok"
+        | "tn" | "tx" | "wi" => "America/Chicago",
+        // Mountain (Arizona uses no DST; Phoenix IANA handles that).
+        "co" | "mt" | "nm" | "ut" | "wy" => "America/Denver",
+        "az" => "America/Phoenix",
+        // Kansas / Nebraska / N Dakota / S Dakota — mostly Central,
+        // small western strip Mountain; go with Central.
+        "ks" | "ne" | "nd" | "sd" => "America/Chicago",
+        // Pacific
+        "ca" | "nv" | "wa" => "America/Los_Angeles",
+        "or" | "id" => "America/Los_Angeles",
+        // Alaska + Hawaii + territories
+        "ak" => "America/Anchorage",
+        "hi" => "Pacific/Honolulu",
+        _ => "",
+    }
 }
 
 /// Return every game across all programs with a date in
@@ -723,6 +772,11 @@ fn list_todays_matches(today: String) -> Result<Vec<UpcomingMatch>, String> {
         std::collections::HashMap::new();
     let mut name_to_conf: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
+    // slug → IANA tz for the schedule owner's home state, so kickoff
+    // times can be interpreted in the correct source timezone before
+    // conversion to the user's local time on the frontend.
+    let mut slug_to_tz: std::collections::HashMap<String, &'static str> =
+        std::collections::HashMap::new();
     for g in &all_games {
         if !g.program_name.is_empty() {
             let k = normalize_team_name(&g.program_name);
@@ -736,6 +790,7 @@ fn list_todays_matches(today: String) -> Result<Vec<UpcomingMatch>, String> {
         let k = normalize_team_name(&p.name);
         name_to_slug.entry(k.clone()).or_insert_with(|| p.slug.clone());
         name_to_conf.entry(k).or_insert_with(|| p.conference.clone());
+        slug_to_tz.insert(p.slug.clone(), state_to_iana_tz(&p.state));
     }
 
     let mut rows: Vec<UpcomingMatch> = Vec::new();
@@ -746,6 +801,11 @@ fn list_todays_matches(today: String) -> Result<Vec<UpcomingMatch>, String> {
         let opp_key = normalize_team_name(&g.opponent);
         let opp_slug = name_to_slug.get(&opp_key).cloned();
         let opp_conf = name_to_conf.get(&opp_key).cloned().unwrap_or_default();
+        let program_tz = slug_to_tz
+            .get(&g.program_slug)
+            .copied()
+            .unwrap_or("")
+            .to_string();
         rows.push(UpcomingMatch {
             program_slug: g.program_slug.clone(),
             program_name: g.program_name.clone(),
@@ -758,6 +818,7 @@ fn list_todays_matches(today: String) -> Result<Vec<UpcomingMatch>, String> {
             kickoff_time: g.kickoff_time.clone(),
             broadcast_channel: g.broadcast_channel.clone(),
             broadcast_url: g.broadcast_url.clone(),
+            program_tz,
             result: g.result.clone(),
         });
     }
