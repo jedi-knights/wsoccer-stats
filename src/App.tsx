@@ -893,6 +893,21 @@ function TodayPage({
             <tbody>
               {deduped
                 .filter((m) => m.date === d)
+                // Sort by resolved kickoff epoch (which already
+                // accounts for the school's timezone), then by the
+                // primary program name so matchups without a kickoff
+                // read alphabetically. Games with no parseable
+                // kickoff fall to the bottom of the date group.
+                .sort((a, b) => {
+                  const ea = resolveKickoffEpoch(a);
+                  const eb = resolveKickoffEpoch(b);
+                  if (ea !== null && eb !== null && ea !== eb) return ea - eb;
+                  if (ea !== null && eb === null) return -1;
+                  if (ea === null && eb !== null) return 1;
+                  return (a.program_name || a.program_slug).localeCompare(
+                    b.program_name || b.program_slug,
+                  );
+                })
                 .map((m) => {
                   const live = isMatchLive(m, now);
                   const kickoffEpoch = resolveKickoffEpoch(m);
