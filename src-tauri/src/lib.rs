@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 pub use data::{read_ndjson_dir, read_ndjson_file, Game, GameResult};
 pub use roster::{read_roster_file, Player};
-pub use standings::{compute_standings, Standing};
+pub use standings::{compute_rpi_full, compute_standings, RpiComponents, Standing};
 pub use stats::{read_stats_file, PlayerStats};
 
 /// Base directory the app reads NDJSON from (holds `schedules/`, `rosters/`,
