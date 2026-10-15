@@ -74,6 +74,10 @@ pub(crate) fn normalize_team_name(name: &str) -> String {
             tail
         } else if let Some(after) = strip_paren_ranking(rest) {
             after
+        } else if let Some(after) = strip_bracket_ranking(rest) {
+            after
+        } else if let Some(after) = strip_no_dot_ranking(rest) {
+            after
         } else if let Some(after) = strip_word_ci(rest, "RV") {
             after
         } else if let Some(after) = strip_t_number_prefix(rest) {
@@ -247,6 +251,68 @@ fn strip_t_number_prefix(s: &str) -> Option<&str> {
     } else {
         None
     }
+}
+
+/// Strip a leading bracketed ranking marker: ``[RV] Notre Dame``,
+/// ``[8] Vanderbilt``, ``[8/4] Tennessee``. Returns the remainder
+/// after the ``]`` + its trailing whitespace, or ``None`` when the
+/// bracketed content doesn't look like a rank. Keeps us from
+/// accidentally eating something like ``[Postponed] Duke``.
+fn strip_bracket_ranking(s: &str) -> Option<&str> {
+    let rest = s.strip_prefix('[')?;
+    let close = rest.find(']')?;
+    let inside = rest[..close].trim();
+    if inside.is_empty() {
+        return None;
+    }
+    let looks_like_rank = inside.eq_ignore_ascii_case("RV")
+        || inside.starts_with('#')
+        || (inside
+            .trim_start_matches(|c: char| c == 'T' || c == 't' || c == '#')
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '/')
+            && inside.chars().any(|c| c.is_ascii_digit()));
+    if !looks_like_rank {
+        return None;
+    }
+    let after = &rest[close + 1..];
+    let after_ws = after.trim_start();
+    if after_ws.is_empty() {
+        None
+    } else {
+        Some(after_ws)
+    }
+}
+
+/// Strip a leading ``No. <rank>`` prefix. WMT customer sites emit
+/// opponent names like ``No. 6/7 North Carolina`` and ``No. 25 Purdue``
+/// through their ``/website-api`` schedule endpoint; the rank itself
+/// may be a single number or ``N/N`` (AP/Coaches split). Returns
+/// ``None`` when the input doesn't look like ``No.`` followed by a
+/// numeric rank — so a program literally named ``No. Alabama`` (none
+/// exist, but as a guard) wouldn't eat the ``No.`` segment.
+fn strip_no_dot_ranking(s: &str) -> Option<&str> {
+    // Accept the common forms ``No. 6`` and the rarer ``No 6`` (no
+    // period, same intent). Both must be followed by whitespace +
+    // the rank token.
+    let rest = s
+        .strip_prefix("No.")
+        .or_else(|| s.strip_prefix("no."))
+        .or_else(|| s.strip_prefix("No "))
+        .or_else(|| s.strip_prefix("no "))?;
+    // After ``No.`` consume whitespace, then one rank token, then
+    // whitespace, then the rest of the name.
+    let after_prefix = rest.trim_start();
+    let (rank_token, tail) = split_once_ws(after_prefix);
+    if rank_token.is_empty() || tail.is_empty() {
+        return None;
+    }
+    let looks_like_rank = rank_token.chars().all(|c| c.is_ascii_digit() || c == '/')
+        && rank_token.chars().any(|c| c.is_ascii_digit());
+    if !looks_like_rank {
+        return None;
+    }
+    Some(tail)
 }
 
 fn load_games() -> Result<Vec<Game>, String> {
@@ -1408,6 +1474,49 @@ mod name_norm_tests {
         // should not collapse to empty — leave it alone.
         assert_eq!(n("RV"), "rv");
         assert_eq!(n("#8"), "#8");
+    }
+
+    #[test]
+    fn strips_bracketed_rank() {
+        // WMT customer sites emit "[RV]" / "[8]" / "[8/4]" through
+        // their /website-api schedule endpoint. Michigan State's
+        // opponents arrived with "[RV]  Xavier" and "[RV] Notre Dame"
+        // formats; dropping the bracket is what re-connects them to
+        // the registry during RPI opponent resolution.
+        assert_eq!(n("[RV] Notre Dame"), "notre dame");
+        assert_eq!(n("[RV]  Xavier"), "xavier");
+        assert_eq!(n("[8] Vanderbilt"), "vanderbilt");
+        assert_eq!(n("[8/4] Tennessee"), "tennessee");
+        assert_eq!(n("[#T3] Florida State"), "florida state");
+    }
+
+    #[test]
+    fn does_not_eat_bracketed_non_rank() {
+        // Bracketed content that doesn't look like a rank — e.g. a
+        // status marker — must stay in place so the normalized name
+        // reflects what the ingest produced.
+        assert_eq!(n("[Postponed] Duke"), "[postponed] duke");
+    }
+
+    #[test]
+    fn strips_no_dot_rank_prefix() {
+        // WMT /website-api opponent names: "No. 6/7 North Carolina",
+        // "No. 25 Purdue", "No. 18/17 Washington". The leading
+        // "No. <rank>" is noise.
+        assert_eq!(n("No. 6/7 North Carolina"), "north carolina");
+        assert_eq!(n("No. 25 Purdue"), "purdue");
+        assert_eq!(n("No. 18/17 Washington"), "washington");
+        assert_eq!(n("No. 12/7 Colorado"), "colorado");
+        assert_eq!(n("No. 16 UCLA"), "ucla");
+        // No-period variant.
+        assert_eq!(n("No 25 Purdue"), "purdue");
+    }
+
+    #[test]
+    fn does_not_eat_leading_no_in_normal_names() {
+        // Only strip "No. <rank>" — the literal word "No" followed
+        // by a non-numeric token stays as the program name.
+        assert_eq!(n("No Name University"), "no name university");
     }
 }
 
