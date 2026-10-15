@@ -1866,11 +1866,14 @@ function StandingsPage({
       <p className="method-note">
         RPI uses the NCAA DI women's soccer formula with weights
         reverse-engineered from NCAA's published table:{" "}
-        <code>0.25·AWP + 0.55·OWP + 0.20·OOWP</code> over DI-vs-DI games only.
-        AWP is a location-weighted winning percentage (road win 1.2, home win
-        0.8, home loss 1.2, road loss 0.8, neutral 1.0; ties split half each).
-        OWP and OOWP use opponents' plain win percentage, not the location-
-        weighted AWP.
+        <code>0.25·AWP + 0.55·OWP + 0.20·OOWP + Σ Δ</code> over DI-vs-DI
+        games only. AWP is a location-weighted winning percentage (road win
+        1.2, home win 0.8, home loss 1.2, road loss 0.8, neutral 1.0; ties
+        split half each). OWP and OOWP use opponents' plain win percentage,
+        not the location-weighted AWP. Σ Δ layers in the 2024+ bonus/penalty
+        table on top of baseline RPI: small per-game bonuses for non-conference
+        wins and ties against higher-ranked opponents, small penalties for
+        losses and ties against lower-ranked ones.
       </p>
       {error && (
         <p className="error" role="alert">
