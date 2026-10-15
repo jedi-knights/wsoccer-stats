@@ -153,11 +153,17 @@ pub type NameSlugSeed<'a> = &'a [(&'a str, &'a str)];
 /// - `AWP(T)` = **adjusted** winning percentage, with each game weighted
 ///   by location: road wins and home losses count more; home wins and
 ///   road losses count less. See `location_weights` below.
-/// - `OWP(T)` = mean, over each DI opponent `O` of `T`, of `O`'s AWP
-///   **with the games between `O` and `T` removed** (so the team's own
-///   results don't inflate its opponents' rating)
-/// - `OOWP(T)` = mean, over each DI opponent `O` of `T`, of `O`'s AWP
-///   from `O`'s own opponents' perspective
+/// - `OWP(T)` = mean, over each DI opponent `O` of `T`, of `O`'s **plain**
+///   winning percentage `(W + 0.5·T) / (W + L + T)` **with the games
+///   between `O` and `T` removed** (so the team's own results don't
+///   inflate its opponents' rating). Location weighting is applied only
+///   to `AWP(T)` — opponents' and opponents'-opponents' records enter
+///   the formula unweighted. This matches NCAA methodology (women's
+///   soccer, since 2013): location adjustment is a reward for the
+///   subject team's road play, not a re-rating of every schedule it
+///   touched.
+/// - `OOWP(T)` = mean, over each DI opponent `O` of `T`, of `O`'s plain
+///   OWP (unweighted, same formula as above but with `O` as subject).
 ///
 /// **DI-only scope.** Games against opponents not in `extra_names` are
 /// excluded entirely — not just from OWP/OOWP but from the team's own
@@ -302,9 +308,13 @@ pub fn compute_rpi_full(
             .push((opp_norm, outcome, g.home_away.clone()));
     }
 
-    // O's AWP with every game against the program identified by
-    // `target_slug` removed. Returns None when O ends up with 0
-    // counted games after the exclusion.
+    // O's **plain** winning percentage with every game against the program
+    // identified by `target_slug` removed. Returns None when O ends up
+    // with 0 counted games after the exclusion.
+    //
+    // Plain, not location-weighted, because the NCAA women's soccer RPI
+    // formula applies location weighting only to the subject team's own
+    // AWP. Opponents enter OWP/OOWP via their straight W/L/T record.
     //
     // Exclusion is slug-based (not name-based) so an alias like
     // "Princeton University" → `princeton` and a direct "Princeton"
@@ -312,30 +322,27 @@ pub fn compute_rpi_full(
     // version missed exclusions when a schedule spelled the target's
     // name with a suffix (e.g. "Dartmouth College") that the registry
     // stored without ("Dartmouth").
-    let awp_excluding = |o_slug: &str, target_slug: &str| -> Option<f64> {
+    let wp_excluding = |o_slug: &str, target_slug: &str| -> Option<f64> {
         let games = opponents.get(o_slug)?;
-        let mut adj_w = 0.0f64;
-        let mut adj_l = 0.0f64;
-        for (opp_name, outcome, ha) in games {
+        let mut w = 0.0f64;
+        let mut l = 0.0f64;
+        let mut t = 0.0f64;
+        for (opp_name, outcome, _ha) in games {
             if name_to_slug.get(opp_name).map(String::as_str) == Some(target_slug) {
                 continue;
             }
-            let (win_w, loss_w) = location_weights(ha);
             match outcome {
-                'W' => adj_w += win_w,
-                'L' => adj_l += loss_w,
-                'T' => {
-                    adj_w += 0.5 * win_w;
-                    adj_l += 0.5 * loss_w;
-                }
+                'W' => w += 1.0,
+                'L' => l += 1.0,
+                'T' => t += 1.0,
                 _ => {}
             }
         }
-        let denom = adj_w + adj_l;
+        let denom = w + l + t;
         if denom == 0.0 {
             return None;
         }
-        Some(adj_w / denom)
+        Some((w + 0.5 * t) / denom)
     };
 
     // Standard OWP(O) — mean of O's opponents' AWP, each excluding games
@@ -361,7 +368,7 @@ pub fn compute_rpi_full(
             let Some(opp_slug) = name_to_slug.get(opp_name) else {
                 continue;
             };
-            if let Some(wp) = awp_excluding(opp_slug, o_slug) {
+            if let Some(wp) = wp_excluding(opp_slug, o_slug) {
                 sum += wp;
                 n += 1;
             }
@@ -395,7 +402,7 @@ pub fn compute_rpi_full(
             let Some(opp_slug) = name_to_slug.get(opp_name) else {
                 continue;
             };
-            if let Some(w) = awp_excluding(opp_slug, t_slug) {
+            if let Some(w) = wp_excluding(opp_slug, t_slug) {
                 owp_sum += w;
                 owp_n += 1;
             }
@@ -693,6 +700,67 @@ mod tests {
             (rpi["b"].wp - 0.70).abs() < 1e-9,
             "B AWP should be 0.70, got {}",
             rpi["b"].wp
+        );
+    }
+
+    #[test]
+    fn owp_uses_plain_opponent_wp_not_location_weighted() {
+        // Location weighting applies only to the subject team's own AWP;
+        // opponents enter OWP/OOWP via plain (W + 0.5·T) / (W + L + T).
+        //
+        // Setup: subject `a` plays `b` on neutral turf (W). `b` plays
+        // two other games: home W vs c, home L vs d — a schedule shaped
+        // so plain WP and location-adjusted WP visibly diverge.
+        //
+        //   b excluding games vs a: 1W (home), 1L (home)
+        //   b plain WP = (1 + 0.5·0) / 2 = 0.5
+        //   b adj WP   = home W (0.6) / (0.6 + home L (1.4)) = 0.3
+        //
+        // OWP(a) must use `b`'s plain WP (0.5), not its adjusted WP (0.3).
+        //
+        //   AWP(a)  = 1.0 (one neutral W vs b)
+        //   OWP(a)  = 0.5  (b's plain WP excluding games vs a)
+        //   OOWP(a) = mean of b's opponents' plain WPs each excluding
+        //             games vs b:
+        //             c (1-0 vs b excluded → 0 games) → excluded from mean
+        //             d (1-0 vs b excluded → 0 games) → excluded from mean
+        //             → OOWP(a) = 0 (empty)
+        //
+        //   RPI(a) = 0.25·1.0 + 0.50·0.5 + 0.25·0.0 = 0.5
+        let games = vec![
+            game_at("a", "b", "W", 1, 0, "neutral"),
+            game_at("b", "a", "L", 0, 1, "neutral"),
+            game_at("b", "c", "W", 2, 0, "home"),
+            game_at("b", "d", "L", 0, 1, "home"),
+            game_at("c", "b", "L", 0, 2, "away"),
+            game_at("d", "b", "W", 1, 0, "away"),
+        ];
+        let seed = [("a", "a"), ("b", "b"), ("c", "c"), ("d", "d")];
+        let rpi = compute_rpi_full(&games, &seed);
+
+        // Precondition: `b`'s adjusted and plain WPs genuinely differ in
+        // this setup — otherwise the assertion below would pass for the
+        // wrong reason (location-weighted OWP would equal plain OWP).
+        let b_plain: f64 = 0.5;
+        let b_adj: f64 = 0.6 / (0.6 + 1.4); // home W, home L
+        assert!(
+            (b_adj - b_plain).abs() > 0.1,
+            "test precondition: b's adj WP ({b_adj}) must differ from plain WP ({b_plain})",
+        );
+
+        // OWP(a) uses b's **plain** WP, not adj.
+        assert!(
+            (rpi["a"].owp - b_plain).abs() < 1e-9,
+            "OWP(a) should equal b's plain WP ({b_plain}), got {}",
+            rpi["a"].owp
+        );
+
+        // Full RPI follows.
+        let expected = 0.25 * 1.0 + 0.5 * b_plain + 0.25 * 0.0;
+        assert!(
+            (rpi["a"].rpi - expected).abs() < 1e-9,
+            "RPI(a) should be {expected}, got {}",
+            rpi["a"].rpi
         );
     }
 
