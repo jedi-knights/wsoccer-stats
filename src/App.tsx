@@ -215,19 +215,21 @@ function SortHeader<K extends string>({
   sort,
   onToggle,
   align,
+  title,
 }: {
   label: string;
   sortKey: K;
   sort: SortSpec<K> | null;
   onToggle: (k: K) => void;
   align?: "left" | "right";
+  title?: string;
 }) {
   const active = sort?.key === sortKey;
   return (
     <th
       className={`sortable${align === "right" ? " right" : ""}${active ? " sort-active" : ""}`}
       onClick={() => onToggle(sortKey)}
-      title="Click to sort"
+      title={title ?? "Click to sort"}
     >
       <span className="th-label">{label}</span>
       <span className="sort-arrow" aria-hidden="true">
@@ -837,28 +839,37 @@ function TodayPage({
     return d.toLocaleDateString("sv-SE");
   }, []);
 
-  // Deduplicate two-known-team matchups: prefer the home team's row so
-  // each unique game appears once.
+  // Deduplicate matchups: both D1 schedules list the same game, so a
+  // Virginia-vs-Duke match shows up once from each perspective. Pair by
+  // sorted slug key and prefer the home-team row. When the backend
+  // couldn't resolve `opponent_slug` (name mismatch between the two
+  // schedules — e.g., "Tulane University" vs "Tulane"), fall back to a
+  // name→slug map built from the result set itself: any program that
+  // appears as `program_name` canonicalizes its slug, so the other
+  // side's unresolved opponent reference can still find it.
   const deduped = useMemo(() => {
     if (!matches) return matches;
-    // Key by sorted pair of slugs when both known. Prefer the row
-    // where the OWNER is the home team; if neither is home (both away
-    // shouldn't happen), keep the first encountered.
-    const byPair = new Map<string, UpcomingMatch>();
-    const singles: UpcomingMatch[] = [];
+    const normalizeName = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const nameToSlug = new Map<string, string>();
     for (const m of matches) {
-      if (!m.opponent_slug) {
-        singles.push(m);
-        continue;
+      if (m.program_slug && m.program_name) {
+        nameToSlug.set(normalizeName(m.program_name), m.program_slug);
       }
-      const key = [m.program_slug, m.opponent_slug].sort().join("|") + "|" + m.date;
+    }
+    const byPair = new Map<string, UpcomingMatch>();
+    for (const m of matches) {
+      const oppSlug =
+        m.opponent_slug ?? nameToSlug.get(normalizeName(m.opponent_name)) ?? null;
+      const oppKey = oppSlug ?? "name:" + normalizeName(m.opponent_name);
+      const key = [m.program_slug, oppKey].sort().join("|") + "|" + m.date;
       const existing = byPair.get(key);
       const isHome = m.home_away === "home";
       if (!existing || (isHome && existing.home_away !== "home")) {
         byPair.set(key, m);
       }
     }
-    return [...byPair.values(), ...singles];
+    return [...byPair.values()];
   }, [matches]);
 
   if (matches === null) return <main className="container"><p>Loading…</p></main>;
@@ -923,10 +934,22 @@ function TodayPage({
                         ? "vs (n)"
                         : "vs";
                   const status = m.result
-                    ? `${m.result.outcome} ${m.result.team_score}-${m.result.opponent_score}`
+                    ? `Final (${m.result.outcome})`
                     : live
                       ? "LIVE"
                       : "Upcoming";
+                  // When the row has a result, show the score between
+                  // the two team names so the reader can see at a
+                  // glance who scored what. The row's perspective is
+                  // "program on the left, opponent on the right", so
+                  // team_score (which the backend defines as this
+                  // program's score) lines up with the left name.
+                  const teamScore = m.result?.team_score;
+                  const oppScore = m.result?.opponent_score;
+                  const programWon =
+                    m.result != null && teamScore! > oppScore!;
+                  const opponentWon =
+                    m.result != null && oppScore! > teamScore!;
                   return (
                     <tr
                       key={`${m.program_slug}-${m.opponent_slug ?? m.opponent_name}-${m.date}`}
@@ -935,7 +958,7 @@ function TodayPage({
                       <td>{kickoffLocal}</td>
                       <td>
                         <button
-                          className="linklike"
+                          className={`linklike${programWon ? " today-team-winner" : ""}`}
                           onClick={() =>
                             onOpenRoster(
                               m.program_slug,
@@ -945,11 +968,26 @@ function TodayPage({
                         >
                           {m.program_name || m.program_slug}
                         </button>
-                        {" "}
-                        <span className="today-venue">{venue}</span>{" "}
+                        {m.result != null ? (
+                          <>
+                            {" "}
+                            <span className="today-score">{teamScore}</span>
+                            {" "}
+                            <span className="today-venue">{venue}</span>
+                            {" "}
+                            <span className="today-score">{oppScore}</span>
+                            {" "}
+                          </>
+                        ) : (
+                          <>
+                            {" "}
+                            <span className="today-venue">{venue}</span>
+                            {" "}
+                          </>
+                        )}
                         {m.opponent_slug ? (
                           <button
-                            className="linklike"
+                            className={`linklike${opponentWon ? " today-team-winner" : ""}`}
                             onClick={() =>
                               onOpenRoster(m.opponent_slug!, m.opponent_name)
                             }
@@ -957,7 +995,9 @@ function TodayPage({
                             {m.opponent_name}
                           </button>
                         ) : (
-                          <span>{m.opponent_name}</span>
+                          <span className={opponentWon ? "today-team-winner" : undefined}>
+                            {m.opponent_name}
+                          </span>
                         )}
                       </td>
                       <td>
@@ -1823,6 +1863,12 @@ function StandingsPage({
           ))}
         </div>
       </div>
+      <p className="method-note">
+        RPI uses the NCAA DI women's soccer formula:{" "}
+        <code>0.25·AWP + 0.50·OWP + 0.25·OOWP</code> over DI-vs-DI games only.
+        AWP is a location-weighted winning percentage (road win 1.4, home win
+        0.6, home loss 1.4, road loss 0.6, neutral 1.0; ties split half each).
+      </p>
       {error && (
         <p className="error" role="alert">
           Error: {error}
@@ -1860,6 +1906,7 @@ function StandingsPage({
                 sortKey="rpi_rank"
                 sort={sort}
                 onToggle={toggleSort}
+                title="NCAA DI women's soccer RPI: 25% adjusted winning percentage + 50% opponents' AWP + 25% opponents' opponents' AWP. Wins/losses are location-weighted (road win = 1.4; home win = 0.6; home loss = 1.4; road loss = 0.6; neutral = 1.0; ties split half-win + half-loss at the game's location). Only DI opponents count."
               />
               <SortHeader
                 label="PTS"

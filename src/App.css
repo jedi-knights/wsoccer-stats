@@ -193,6 +193,21 @@
   flex-wrap: wrap;
 }
 
+.method-note {
+  font-size: 0.82rem;
+  color: var(--muted, #666);
+  margin: 0 0 12px;
+  line-height: 1.4;
+  max-width: 90ch;
+}
+
+.method-note code {
+  font-size: 0.85em;
+  padding: 1px 4px;
+  background: var(--input-bg);
+  border-radius: 3px;
+}
+
 .segmented {
   display: inline-flex;
   border: 1px solid var(--input-border);
@@ -471,6 +486,15 @@ table.today-matches tbody tr:nth-child(even) {
 .today-venue {
   color: var(--text-muted);
   margin: 0 2px;
+}
+
+.today-score {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.today-team-winner {
+  font-weight: 700;
 }
 
 /* Head-to-head matrix — square W-L-T grid. Wrapper is horizontally
