@@ -210,19 +210,45 @@ pub fn compute_rpi_full(
     // Build the DI name→slug map from the registry seed. Opponents whose
     // normalized name doesn't appear here are treated as non-DI and
     // excluded entirely from the RPI computation.
+    //
+    // Also register common suffix aliases (`<Name> University`,
+    // `<Name> College`): schedules routinely spell "Princeton
+    // University", "Dartmouth College" where the registry stores just
+    // "Princeton" / "Dartmouth". First-wins semantics keep direct
+    // matches like "Boston University" (a distinct program with the
+    // suffix in its canonical name) ahead of any alias that would
+    // otherwise collide.
+    const ALIAS_SUFFIXES: &[&str] = &[" University", " College"];
     let mut name_to_slug: HashMap<String, String> = HashMap::new();
-    let mut slug_to_name_lower: HashMap<String, String> = HashMap::new();
+    // First pass: direct names. These must win over aliases.
     for (name, slug) in extra_names {
         if name.is_empty() || slug.is_empty() {
             continue;
         }
         let norm = crate::normalize_team_name(name);
         name_to_slug
-            .entry(norm.clone())
+            .entry(norm)
             .or_insert_with(|| (*slug).to_string());
-        slug_to_name_lower
-            .entry((*slug).to_string())
-            .or_insert(norm);
+    }
+    // Second pass: suffix aliases. Only insert when the canonical name
+    // doesn't already carry the suffix (so `Boston College` doesn't
+    // self-alias) and when the alias slot is unclaimed by a direct
+    // entry.
+    for (name, slug) in extra_names {
+        if name.is_empty() || slug.is_empty() {
+            continue;
+        }
+        let name_lower = name.to_lowercase();
+        for suf in ALIAS_SUFFIXES {
+            let suf_lower = suf.to_lowercase();
+            if name_lower.ends_with(suf_lower.as_str()) {
+                continue;
+            }
+            let alias = crate::normalize_team_name(&format!("{name}{suf}"));
+            name_to_slug
+                .entry(alias)
+                .or_insert_with(|| (*slug).to_string());
+        }
     }
 
     #[derive(Default, Clone)]
@@ -276,15 +302,22 @@ pub fn compute_rpi_full(
             .push((opp_norm, outcome, g.home_away.clone()));
     }
 
-    // O's AWP with every game against a team named `target_name_lower`
-    // removed. Returns None when O ends up with 0 counted games after
-    // the exclusion.
-    let awp_excluding = |o_slug: &str, target_name_lower: &str| -> Option<f64> {
+    // O's AWP with every game against the program identified by
+    // `target_slug` removed. Returns None when O ends up with 0
+    // counted games after the exclusion.
+    //
+    // Exclusion is slug-based (not name-based) so an alias like
+    // "Princeton University" → `princeton` and a direct "Princeton"
+    // → `princeton` both filter correctly. The earlier name-based
+    // version missed exclusions when a schedule spelled the target's
+    // name with a suffix (e.g. "Dartmouth College") that the registry
+    // stored without ("Dartmouth").
+    let awp_excluding = |o_slug: &str, target_slug: &str| -> Option<f64> {
         let games = opponents.get(o_slug)?;
         let mut adj_w = 0.0f64;
         let mut adj_l = 0.0f64;
         for (opp_name, outcome, ha) in games {
-            if opp_name == target_name_lower {
+            if name_to_slug.get(opp_name).map(String::as_str) == Some(target_slug) {
                 continue;
             }
             let (win_w, loss_w) = location_weights(ha);
@@ -308,7 +341,7 @@ pub fn compute_rpi_full(
     // Standard OWP(O) — mean of O's opponents' AWP, each excluding games
     // vs O. Cached because OOWP(T) queries the same OWP many times.
     let mut owp_cache: HashMap<String, f64> = HashMap::new();
-    let mut owp_of = |o_slug: &str, o_name_lower: &str| -> f64 {
+    let mut owp_of = |o_slug: &str| -> f64 {
         if let Some(&v) = owp_cache.get(o_slug) {
             return v;
         }
@@ -328,7 +361,7 @@ pub fn compute_rpi_full(
             let Some(opp_slug) = name_to_slug.get(opp_name) else {
                 continue;
             };
-            if let Some(wp) = awp_excluding(opp_slug, o_name_lower) {
+            if let Some(wp) = awp_excluding(opp_slug, o_slug) {
                 sum += wp;
                 n += 1;
             }
@@ -341,10 +374,6 @@ pub fn compute_rpi_full(
     let mut out: HashMap<String, RpiComponents> = HashMap::new();
     for (t_slug, t_record) in &records {
         let wp = t_record.awp();
-        let t_name_lower = slug_to_name_lower
-            .get(t_slug)
-            .cloned()
-            .unwrap_or_default();
 
         let Some(t_opps) = opponents.get(t_slug) else {
             out.insert(
@@ -366,15 +395,11 @@ pub fn compute_rpi_full(
             let Some(opp_slug) = name_to_slug.get(opp_name) else {
                 continue;
             };
-            if let Some(w) = awp_excluding(opp_slug, &t_name_lower) {
+            if let Some(w) = awp_excluding(opp_slug, t_slug) {
                 owp_sum += w;
                 owp_n += 1;
             }
-            let opp_name_lower = slug_to_name_lower
-                .get(opp_slug)
-                .cloned()
-                .unwrap_or_else(|| opp_name.clone());
-            oowp_sum += owp_of(opp_slug, &opp_name_lower);
+            oowp_sum += owp_of(opp_slug);
             oowp_n += 1;
         }
         let owp = if owp_n == 0 { 0.0 } else { owp_sum / owp_n as f64 };
@@ -572,6 +597,64 @@ mod tests {
         let rpi = compute_rpi_full(&games, &seed);
         assert!((rpi["a"].rpi - 0.25).abs() < 1e-9, "a RPI: {}", rpi["a"].rpi);
         assert!((rpi["a"].wp - 1.0).abs() < 1e-9, "a AWP: {}", rpi["a"].wp);
+    }
+
+    #[test]
+    fn rpi_resolves_suffix_aliases() {
+        // Harvard's WMT-API opponents arrive as "Princeton University",
+        // "Dartmouth College", "Cornell University" etc. The registry
+        // stores just "Princeton", "Dartmouth", "Cornell". Without
+        // alias resolution those opponents were marked non-DI and
+        // dropped from OWP; the alias seed restores them.
+        //
+        // Setup: a beats "Princeton University" (which resolves to b),
+        // and b has its own game vs a. Both teams play exactly one DI
+        // game, so AWP(a)=1, AWP(b)=0. OWP(a) should include b's AWP
+        // (0.0, not Nothing).
+        let games = vec![
+            game("a", "Princeton University", "W", 1, 0),
+            game("b", "A", "L", 0, 1),
+        ];
+        let seed = [("A", "a"), ("Princeton", "b")];
+        let rpi = compute_rpi_full(&games, &seed);
+        // AWP(a) = 1/1 = 1.0
+        // AWP(b) = 0/1 = 0.0
+        // b did resolve via "Princeton University" -> "Princeton" alias.
+        // OWP(a) = AWP(b excluding games vs a) = None → 0.0
+        // OOWP(a) = OWP(b) = AWP(a excluding games vs b) → None → 0.0
+        // RPI(a) = 0.25*1.0 = 0.25
+        assert!(
+            (rpi["a"].rpi - 0.25).abs() < 1e-9,
+            "a RPI (with alias resolution): {}",
+            rpi["a"].rpi
+        );
+        assert!(rpi.contains_key("b"), "b should also be ranked");
+    }
+
+    #[test]
+    fn rpi_suffix_alias_does_not_shadow_direct_match() {
+        // "Boston University" is a distinct DI program; the alias
+        // mechanism for "Boston" (hypothetical shorter program) must
+        // not win over the direct entry.
+        let games = vec![
+            game("boston_u", "A", "W", 1, 0),
+            game("a", "Boston University", "L", 0, 1),
+        ];
+        // Seed with Boston University as itself. Even if some other
+        // program named "Boston" were registered first with alias
+        // "Boston University", the direct entry must win.
+        let seed = [("Boston University", "boston_u"), ("A", "a")];
+        let rpi = compute_rpi_full(&games, &seed);
+        // a's opponent must resolve to boston_u, not fail or alias
+        // to some phantom "Boston" slug.
+        assert!(
+            (rpi["a"].wp - 0.0).abs() < 1e-9,
+            "a's AWP should be 0 (lost its one game)",
+        );
+        assert!(
+            (rpi["boston_u"].wp - 1.0).abs() < 1e-9,
+            "boston_u's AWP should be 1 (won its one game)",
+        );
     }
 
     #[test]
