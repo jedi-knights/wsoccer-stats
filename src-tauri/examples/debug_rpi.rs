@@ -126,9 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn normalize(name: &str) -> String {
-    name.trim()
-        .to_lowercase()
-        .replace("#", "")
+    wsoccer_stats_lib::normalize_team_name_debug(name)
 }
 
 fn truncate(s: &str, n: usize) -> String {

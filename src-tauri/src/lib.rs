@@ -58,6 +58,14 @@ fn stats_dir() -> PathBuf {
 /// Team names with non-ASCII characters (a hypothetical ``UCF-Osceola``
 /// with an accent) are left byte-identical after the strippers — only
 /// the final ``to_lowercase()`` sees Unicode.
+/// Public wrapper so examples outside the crate can mirror the exact
+/// opponent-resolution logic compute_rpi_full uses. Kept out of the
+/// top-level API surface by naming (`_debug` suffix) so production
+/// callers continue to use the pub(crate) alias.
+pub fn normalize_team_name_debug(name: &str) -> String {
+    normalize_team_name(name)
+}
+
 pub(crate) fn normalize_team_name(name: &str) -> String {
     let trimmed = name.trim();
     // Drop as many leading ranking tokens as we see. Each token is either
