@@ -45,7 +45,7 @@ for the commonly-cited 0.25/0.50/0.25 + ×0.6/×1.4 numbers (which
 are the pre-2005 men's basketball spec):
 
 ```
-RPI = 0.25 · AWP + 0.55 · OWP + 0.20 · OOWP
+RPI = 0.25 · AWP + 0.55 · OWP + 0.20 · OOWP + Σ Δ_g
 ```
 
 - **AWP** — Adjusted Winning Percentage. Each result is weighted by game
@@ -68,6 +68,25 @@ RPI = 0.25 · AWP + 0.55 · OWP + 0.20 · OOWP
   records enter OWP and OOWP as `(W + 0.5·T) / (W + L + T)`.
 
 - **OOWP** — mean plain OWP of each DI opponent's own opponents.
+
+- **Σ Δ_g** — the 2024+ bonus/penalty pass. For each **non-conference**
+  DI game, add a small per-game adjustment based on the opponent's
+  baseline RPI rank:
+
+  | Result | Opponent rank | Away | Neutral | Home |
+  |---|---|---|---|---|
+  | Win  | Top 40          | +0.0024 | +0.0022 | +0.0020 |
+  | Tie  | Top 40          | +0.0012 | +0.0010 | +0.0008 |
+  | Win  | 41–80           | +0.0018 | +0.0016 | +0.0014 |
+  | Tie  | Bottom 41–80    | −0.0002 | −0.0004 | −0.0006 |
+  | Loss | Bottom 41–80    | −0.0015 | −0.0017 | −0.0020 |
+  | Tie  | Bottom 40       | −0.0009 | −0.0011 | −0.0013 |
+  | Loss | Bottom 40       | −0.0022 | −0.0024 | −0.0026 |
+
+  Conference games and un-tabulated outcomes (losing to the top 40,
+  beating the bottom tiers, tying the 41–80 middle) get zero. The pass
+  is naturally two-stage: compute every team's baseline RPI first, use
+  those ranks to classify opponents, then layer the deltas on.
 
 **DI-only scope.** Games against non-DI opponents (anything not in the
 `athletics-ingest-platform` registry) are excluded entirely — not just
