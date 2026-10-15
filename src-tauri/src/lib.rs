@@ -66,6 +66,48 @@ pub fn normalize_team_name_debug(name: &str) -> String {
     normalize_team_name(name)
 }
 
+/// Known opponent-name aliases that programs' schedules spell
+/// differently from the aip registry. Each entry is
+/// `(display_name_as_opponents_write_it, registry_slug)`.
+///
+/// Why this is a crate-level constant rather than a registry
+/// field: these are stable, well-known abbreviations/full-names
+/// shared across every program's view of the opponent. Discovery
+/// came from scanning the full ingest corpus for unresolved
+/// opponent names and cross-referencing against the registry.
+///
+/// Adding an entry here instead of a registry field means we can
+/// fix opponent resolution in one place without round-tripping
+/// a change through `athletics-ingest-platform`'s YAML. Promote
+/// to the registry if the alias list grows beyond ~50 entries.
+pub const PROGRAM_NAME_ALIASES: &[(&str, &str)] = &[
+    // SEC schools whose shortened registry names miss on opponents'
+    // schedules that spell the full name.
+    ("Louisiana State", "lsu"),
+
+    // UConn / Massachusetts / etc. — schedules use the common
+    // short form; the registry uses the state/city only.
+    ("UMass", "massachusetts"),
+
+    // Cal State system — schedules write the "CSUN" abbreviation
+    // instead of "Cal State Northridge".
+    ("CSUN", "cal_state_northridge"),
+
+    // Service academies — the registry spells out "Army West Point"
+    // but opponents just write "Army".
+    ("Army", "army_west_point"),
+
+    // UNC Wilmington / Illinois Chicago / etc. — opponents use the
+    // acronym that doesn't match the registry's expanded form.
+    ("UNCW", "unc_wilmington"),
+    ("UIC", "illinois_chicago"),
+    ("UT Martin", "tennessee_martin"),
+    ("LMU", "loyola_marymount"),
+
+    // "Nicholls" (no "State") on opponents' schedules.
+    ("Nicholls", "nicholls_state"),
+];
+
 pub(crate) fn normalize_team_name(name: &str) -> String {
     let trimmed = name.trim();
     // Drop as many leading ranking tokens as we see. Each token is either
@@ -482,9 +524,13 @@ fn list_standings(
     // is the same whether the user is viewing SEC-only or all conferences.
     // Seed the RPI opponent lookup from the registry so games against
     // programs whose schedule failed to ingest still count in OWP/OOWP.
+    // Hardcoded PROGRAM_NAME_ALIASES extend the seed with alternate
+    // display names observed in the live corpus but not stored in the
+    // registry (e.g. "Louisiana State" -> LSU, "UMass" -> Massachusetts).
     let registry_seed: Vec<(&str, &str)> = registry
         .iter()
         .map(|p| (p.name.as_str(), p.slug.as_str()))
+        .chain(PROGRAM_NAME_ALIASES.iter().copied())
         .collect();
     let rpi_full = standings::compute_rpi_full(&all_games, &registry_seed);
     let rpi_by_slug: std::collections::HashMap<String, f64> =
@@ -944,6 +990,7 @@ fn list_conference_summary() -> Result<Vec<ConferenceSummary>, String> {
     let registry_seed: Vec<(&str, &str)> = registry
         .iter()
         .map(|p| (p.name.as_str(), p.slug.as_str()))
+        .chain(PROGRAM_NAME_ALIASES.iter().copied())
         .collect();
     let rpi_full = standings::compute_rpi_full(&all_games, &registry_seed);
     let rpi_by_slug: std::collections::HashMap<String, f64> =
