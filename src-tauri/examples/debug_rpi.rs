@@ -38,13 +38,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seed: Vec<(&str, &str)> = registry
         .iter()
         .map(|(slug, name)| (name.as_str(), slug.as_str()))
+        .chain(wsoccer_stats_lib::PROGRAM_NAME_ALIASES.iter().copied())
         .collect();
     // name (as printed on another team's schedule) -> registry slug.
     // Build the same normalized map compute_rpi_full uses so we can
-    // resolve opponents the same way the computation does.
+    // resolve opponents the same way the computation does — includes
+    // the hardcoded alias set so the diagnostic doesn't lie about
+    // "non-DI" opponents compute_rpi_full actually resolves.
     let name_to_slug: HashMap<String, String> = registry
         .iter()
         .map(|(slug, name)| (name.clone(), slug.clone()))
+        .chain(
+            wsoccer_stats_lib::PROGRAM_NAME_ALIASES
+                .iter()
+                .map(|(n, s)| ((*n).to_string(), (*s).to_string())),
+        )
         .collect();
 
     let rpi = wsoccer_stats_lib::compute_rpi_full(&games, &seed);

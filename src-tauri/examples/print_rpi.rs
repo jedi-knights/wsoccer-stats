@@ -36,6 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seed: Vec<(&str, &str)> = registry
         .iter()
         .map(|(slug, name, _)| (name.as_str(), slug.as_str()))
+        .chain(wsoccer_stats_lib::PROGRAM_NAME_ALIASES.iter().copied())
         .collect();
 
     let rpi = wsoccer_stats_lib::compute_rpi_full(&games, &seed);
