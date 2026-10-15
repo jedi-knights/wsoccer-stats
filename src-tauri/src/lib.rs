@@ -139,6 +139,72 @@ pub const PROGRAM_NAME_ALIASES: &[(&str, &str)] = &[
 
     // "ULM" acronym for Louisiana Monroe.
     ("ULM", "louisiana_monroe"),
+
+    // Long-form opponent names where the registry stores the common
+    // short/acronym form. Discovered via the corpus-wide unresolved
+    // scan — each entry had ≥2 appearances. Duke notably writes
+    // "Southern California" instead of "USC"; without this alias
+    // Duke's W over USC drops out of RPI (both from Duke's AWP and
+    // from USC's OWP contribution).
+    ("Southern California", "usc"),
+    ("Southern Methodist", "smu"),
+    ("Virginia Military", "vmi"),
+    ("Grambling State", "grambling"),
+    ("Texas A&M - Corpus Christi", "texas_am_corpus_christi"),
+    ("UNCG", "unc_greensboro"),
+    ("App State", "appalachian_state"),
+    ("SEMO", "southeast_missouri_state"),
+    ("Southeast Missouri", "southeast_missouri_state"),
+    ("Miami (Ohio)", "miami_ohio"),
+    ("Southeastern", "southeastern_louisiana"),
+    ("HCU", "houston_christian"),
+    ("Jax State", "jacksonville_state"),
+    ("Arkansas - Pine Bluff", "arkansas_pine_bluff"),
+    ("CCSU", "central_connecticut"),
+    ("Central Connecticut State", "central_connecticut"),
+    ("Loyola (Md.)", "loyola_maryland"),
+    ("FAU", "florida_atlantic"),
+    ("New Jersey Institute of Technology", "njit"),
+    ("Queens University of Charlotte", "queens"),
+    ("EKU", "eastern_kentucky"),
+    ("NM State", "new_mexico_state"),
+    ("WKU", "western_kentucky"),
+    ("GCU", "grand_canyon"),
+    ("NAU", "northern_arizona"),
+    ("UNC", "north_carolina"),
+    ("UL Lafayette", "louisiana"),
+    ("UL-Lafayette", "louisiana"),
+    ("USD", "san_diego"),
+
+    // "University at X" (SUNY branding) — my normalizer strips
+    // "University of X" but not "University at X". Explicit aliases
+    // keep normalizer narrow.
+    ("University at Albany", "albany"),
+    ("University at Buffalo", "buffalo"),
+    ("University of Nebraska at Omaha", "omaha"),
+    ("University of Massachusetts Lowell", "umass_lowell"),
+
+    // Unicode variants that bypass the ASCII registry.
+    ("San José State", "san_jose_state"),
+
+    // Full-form variants my normalizer doesn't collapse: either the
+    // registry stores a shorter form (Pennsylvania → Penn) or the
+    // name carries a parenthetical state suffix (Md., La., Ky.) that
+    // normalize_team_name doesn't strip.
+    ("Pennsylvania", "penn"),
+    ("Southern Methodist University", "smu"),
+    ("Southeastern La.", "southeastern_louisiana"),
+    ("Eastern Ky.", "eastern_kentucky"),
+    ("ACU", "abilene_christian"),
+    ("Texas A&M - CC", "texas_am_corpus_christi"),
+    ("Central Connecticut State University", "central_connecticut"),
+    ("University of Texas Rio Grande Valley", "texas_rio_grande_valley"),
+    ("Mount St. Mary's (Md.)", "mount_st_marys"),
+    ("Virginia Military Institute", "vmi"),
+    ("Seattle U.", "seattle_u"),
+    ("Southern Mississippi", "southern_miss"),
+    ("Hawai'i", "hawaii"),
+    ("University of Louisiana at Monroe", "louisiana_monroe"),
 ];
 
 pub(crate) fn normalize_team_name(name: &str) -> String {
