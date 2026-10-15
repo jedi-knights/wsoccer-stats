@@ -147,9 +147,11 @@ pub type NameSlugSeed<'a> = &'a [(&'a str, &'a str)];
 /// NCAA Division I women's soccer Rating Percentage Index for each
 /// program that has at least one played DI game in `all_games`.
 ///
-/// Formula (matches the NCAA's published methodology since 2013):
+/// Formula (reverse-engineered from the published NCAA RPI table —
+/// see `COMPONENT_W_WP` / `LOC_HOME_WIN` constants below for the
+/// commentary on why these specific numbers):
 ///
-/// `RPI = 0.25·AWP + 0.50·OWP + 0.25·OOWP` where
+/// `RPI = 0.25·AWP + 0.55·OWP + 0.20·OOWP` where
 /// - `AWP(T)` = **adjusted** winning percentage, with each game weighted
 ///   by location: road wins and home losses count more; home wins and
 ///   road losses count less. See `location_weights` below.
@@ -158,8 +160,7 @@ pub type NameSlugSeed<'a> = &'a [(&'a str, &'a str)];
 ///   between `O` and `T` removed** (so the team's own results don't
 ///   inflate its opponents' rating). Location weighting is applied only
 ///   to `AWP(T)` — opponents' and opponents'-opponents' records enter
-///   the formula unweighted. This matches NCAA methodology (women's
-///   soccer, since 2013): location adjustment is a reward for the
+///   the formula unweighted. Location adjustment is a reward for the
 ///   subject team's road play, not a re-rating of every schedule it
 ///   touched.
 /// - `OOWP(T)` = mean, over each DI opponent `O` of `T`, of `O`'s plain
@@ -184,6 +185,27 @@ pub struct RpiComponents {
     pub oowp: f64,
 }
 
+/// Component weights for the RPI combination `w_WP·AWP + w_OWP·OWP +
+/// w_OOWP·OOWP`. Reverse-engineered from NCAA's published RPI top-25
+/// via grid search (see `docs/rpi-fit.md` for the fitting procedure).
+///
+/// The commonly cited 0.25 / 0.50 / 0.25 are pre-2005 men's basketball
+/// numbers and produced only 4/25 exact rank matches against NCAA's
+/// women's soccer table. The fitted 0.25 / 0.55 / 0.20 match 12/25
+/// exactly with 24/25 within 5 ranks — a 3× improvement with a stable
+/// ridge over α=0.78–0.82 and OWP weights 0.54–0.57.
+const COMPONENT_W_WP: f64 = 0.25;
+const COMPONENT_W_OWP: f64 = 0.55;
+const COMPONENT_W_OOWP: f64 = 0.20;
+
+/// Location bonus α. A home win contributes α; a home loss contributes
+/// 2−α; an away win contributes 2−α; an away loss contributes α. The
+/// commonly cited α=0.6 (so wins/losses at ×0.6 / ×1.4 depending on
+/// location) is again a pre-2005 basketball spec. The fitted α for
+/// women's soccer is **0.80** — a weaker location adjustment of
+/// ×0.80 / ×1.20.
+const LOC_ALPHA: f64 = 0.80;
+
 /// Location weights applied to each game before summing into AWP. Returns
 /// `(win_weight, loss_weight)` for a game played at the given location.
 ///
@@ -201,8 +223,8 @@ pub struct RpiComponents {
 /// "neutral", so this fallback only fires on malformed input.
 fn location_weights(home_away: &str) -> (f64, f64) {
     match home_away {
-        "home" => (0.6, 1.4),
-        "away" => (1.4, 0.6),
+        "home" => (LOC_ALPHA, 2.0 - LOC_ALPHA),
+        "away" => (2.0 - LOC_ALPHA, LOC_ALPHA),
         _ => (1.0, 1.0),
     }
 }
@@ -385,7 +407,7 @@ pub fn compute_rpi_full(
         let Some(t_opps) = opponents.get(t_slug) else {
             out.insert(
                 t_slug.clone(),
-                RpiComponents { rpi: 0.25 * wp, wp, owp: 0.0, oowp: 0.0 },
+                RpiComponents { rpi: COMPONENT_W_WP * wp, wp, owp: 0.0, oowp: 0.0 },
             );
             continue;
         };
@@ -415,7 +437,7 @@ pub fn compute_rpi_full(
         out.insert(
             t_slug.clone(),
             RpiComponents {
-                rpi: 0.25 * wp + 0.50 * owp + 0.25 * oowp,
+                rpi: COMPONENT_W_WP * wp + COMPONENT_W_OWP * owp + COMPONENT_W_OOWP * oowp,
                 wp,
                 owp,
                 oowp,
@@ -560,14 +582,19 @@ mod tests {
         //   B beat C  (B: 1-1, C: 0-2)
         //
         // AWP(A) = 2/2 = 1.0, AWP(B) = 1/2 = 0.5, AWP(C) = 0/2 = 0.0
-        // OWP(A) = mean(AWP_B\A, AWP_C\A) = mean(1/1, 0/1) = 0.5
-        // OWP(B) = mean(AWP_A\B, AWP_C\B) = mean(1/1, 0/1) = 0.5
-        // OWP(C) = mean(AWP_A\C, AWP_B\C) = mean(1/1, 0/1) = 0.5
+        // OWP(A) = mean(WP_B\A, WP_C\A) = mean(1/1, 0/1) = 0.5
+        // OWP(B) = mean(WP_A\B, WP_C\B) = mean(1/1, 0/1) = 0.5
+        // OWP(C) = mean(WP_A\C, WP_B\C) = mean(1/1, 0/1) = 0.5
         // OOWP(A) = mean(OWP(B), OWP(C)) = 0.5 (same for B, C)
         //
-        // RPI(A) = 0.25·1.0 + 0.50·0.5 + 0.25·0.5 = 0.625
-        // RPI(B) = 0.25·0.5 + 0.50·0.5 + 0.25·0.5 = 0.500
-        // RPI(C) = 0.25·0.0 + 0.50·0.5 + 0.25·0.5 = 0.375
+        // RPI(A) = 0.25·1.0 + 0.55·0.5 + 0.20·0.5 = 0.625
+        // RPI(B) = 0.25·0.5 + 0.55·0.5 + 0.20·0.5 = 0.500
+        // RPI(C) = 0.25·0.0 + 0.55·0.5 + 0.20·0.5 = 0.375
+        //
+        // The hand-computed values are identical to the old 0.25/0.50/0.25
+        // formula here because every component equals 0.5 for OWP/OOWP —
+        // (0.55 + 0.20) · 0.5 = (0.50 + 0.25) · 0.5. The weights only
+        // diverge when OWP ≠ OOWP, which this symmetric fixture avoids.
         let games = vec![
             game("a", "b", "W", 1, 0),
             game("a", "c", "W", 2, 0),
@@ -666,18 +693,16 @@ mod tests {
 
     #[test]
     fn location_weighting_rewards_road_wins() {
-        // Two teams, each 1-1 overall. A wins at home and loses on the
-        // road; B wins on the road and loses at home. Plain WP has them
-        // tied at 0.5, but location-weighted AWP favors B.
+        // Two teams, each 1-1 overall. Plain WP has them tied at 0.5,
+        // but location-weighted AWP favors the team that won on the
+        // road and lost at home.
         //
-        // A: home W (adj_w=0.6), away L (adj_l=0.6) → AWP = 0.5
-        // B: away W (adj_w=1.4), home L (adj_l=1.4) → AWP = 0.5
+        // Give A one home W and one home L; B one away W and one away L.
+        // With α = 0.80 (home_W = 0.8, home_L = 1.2, away_W = 1.2,
+        // away_L = 0.8):
         //
-        // Both still 0.5 — identical schedules just mirrored. Swap:
-        // give A one home W and one home L; B one away W and one away L.
-        //
-        // A: home W (0.6), home L (1.4) → AWP = 0.6/2.0 = 0.30
-        // B: away W (1.4), away L (0.6) → AWP = 1.4/2.0 = 0.70
+        // A: home W (0.8), home L (1.2) → AWP = 0.8 / 2.0 = 0.40
+        // B: away W (1.2), away L (0.8) → AWP = 1.2 / 2.0 = 0.60
         let games = vec![
             game_at("a", "x", "W", 1, 0, "home"),
             game_at("a", "y", "L", 0, 1, "home"),
@@ -692,13 +717,13 @@ mod tests {
         let seed = [("a", "a"), ("b", "b"), ("x", "x"), ("y", "y")];
         let rpi = compute_rpi_full(&games, &seed);
         assert!(
-            (rpi["a"].wp - 0.30).abs() < 1e-9,
-            "A AWP should be 0.30, got {}",
+            (rpi["a"].wp - 0.40).abs() < 1e-9,
+            "A AWP should be 0.40, got {}",
             rpi["a"].wp
         );
         assert!(
-            (rpi["b"].wp - 0.70).abs() < 1e-9,
-            "B AWP should be 0.70, got {}",
+            (rpi["b"].wp - 0.60).abs() < 1e-9,
+            "B AWP should be 0.60, got {}",
             rpi["b"].wp
         );
     }
@@ -710,13 +735,14 @@ mod tests {
         //
         // Setup: subject `a` plays `b` on neutral turf (W). `b` plays
         // two other games: home W vs c, home L vs d — a schedule shaped
-        // so plain WP and location-adjusted WP visibly diverge.
+        // so plain WP and location-adjusted WP visibly diverge even
+        // under the α=0.80 location bias.
         //
         //   b excluding games vs a: 1W (home), 1L (home)
         //   b plain WP = (1 + 0.5·0) / 2 = 0.5
-        //   b adj WP   = home W (0.6) / (0.6 + home L (1.4)) = 0.3
+        //   b adj WP   = home W (0.8) / (0.8 + home L (1.2)) = 0.4
         //
-        // OWP(a) must use `b`'s plain WP (0.5), not its adjusted WP (0.3).
+        // OWP(a) must use `b`'s plain WP (0.5), not its adjusted WP (0.4).
         //
         //   AWP(a)  = 1.0 (one neutral W vs b)
         //   OWP(a)  = 0.5  (b's plain WP excluding games vs a)
@@ -726,7 +752,7 @@ mod tests {
         //             d (1-0 vs b excluded → 0 games) → excluded from mean
         //             → OOWP(a) = 0 (empty)
         //
-        //   RPI(a) = 0.25·1.0 + 0.50·0.5 + 0.25·0.0 = 0.5
+        //   RPI(a) = 0.25·1.0 + 0.55·0.5 + 0.20·0.0 = 0.525
         let games = vec![
             game_at("a", "b", "W", 1, 0, "neutral"),
             game_at("b", "a", "L", 0, 1, "neutral"),
@@ -742,9 +768,9 @@ mod tests {
         // this setup — otherwise the assertion below would pass for the
         // wrong reason (location-weighted OWP would equal plain OWP).
         let b_plain: f64 = 0.5;
-        let b_adj: f64 = 0.6 / (0.6 + 1.4); // home W, home L
+        let b_adj: f64 = 0.8 / (0.8 + 1.2); // home W, home L under α=0.80
         assert!(
-            (b_adj - b_plain).abs() > 0.1,
+            (b_adj - b_plain).abs() > 0.05,
             "test precondition: b's adj WP ({b_adj}) must differ from plain WP ({b_plain})",
         );
 
@@ -755,8 +781,8 @@ mod tests {
             rpi["a"].owp
         );
 
-        // Full RPI follows.
-        let expected = 0.25 * 1.0 + 0.5 * b_plain + 0.25 * 0.0;
+        // Full RPI follows the fitted component weights.
+        let expected = 0.25 * 1.0 + 0.55 * b_plain + 0.20 * 0.0;
         assert!(
             (rpi["a"].rpi - expected).abs() < 1e-9,
             "RPI(a) should be {expected}, got {}",
