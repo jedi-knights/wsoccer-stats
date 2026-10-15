@@ -85,9 +85,14 @@ pub const PROGRAM_NAME_ALIASES: &[(&str, &str)] = &[
     // schedules that spell the full name.
     ("Louisiana State", "lsu"),
 
-    // UConn / Massachusetts / etc. — schedules use the common
-    // short form; the registry uses the state/city only.
+    // Short/abbreviated opponent names that don't match registry
+    // (which uses the state/city only).
     ("UMass", "massachusetts"),
+    ("UConn", "connecticut"),
+    ("Cal", "california"),
+    ("Pitt", "pittsburgh"),
+    ("Seattle", "seattle_u"),
+    ("Charleston", "college_of_charleston"),
 
     // Cal State system — schedules write the "CSUN" abbreviation
     // instead of "Cal State Northridge".
@@ -103,9 +108,37 @@ pub const PROGRAM_NAME_ALIASES: &[(&str, &str)] = &[
     ("UIC", "illinois_chicago"),
     ("UT Martin", "tennessee_martin"),
     ("LMU", "loyola_marymount"),
+    ("FDU", "fairleigh_dickinson"),
+    ("UIW", "uiw"),
+    ("UTRGV", "texas_rio_grande_valley"),
+    ("ETSU", "east_tennessee_state"),
+    ("FGCU", "florida_gulf_coast"),
+    ("NIU", "northern_illinois"),
+    ("SFA", "stephen_f_austin"),
+    ("UNI", "northern_iowa"),
+    ("UAlbany", "albany"),
+
+    // IU Indy / IUPUI — the Indianapolis campus restructured and goes
+    // by "IU Indy" on current schedules; the registry entry uses the
+    // slug matching that current name directly, so this alias handles
+    // schools still writing the old form.
+    ("IUPUI", "iu_indy"),
 
     // "Nicholls" (no "State") on opponents' schedules.
     ("Nicholls", "nicholls_state"),
+
+    // "Prairie View" without the "A&M" suffix on opponents'
+    // schedules.
+    ("Prairie View", "prairie_view_am"),
+
+    // "Alcorn" without the "State" suffix.
+    ("Alcorn", "alcorn_state"),
+
+    // "Grambling" without the "State" suffix.
+    ("Grambling", "grambling"),
+
+    // "ULM" acronym for Louisiana Monroe.
+    ("ULM", "louisiana_monroe"),
 ];
 
 pub(crate) fn normalize_team_name(name: &str) -> String {
