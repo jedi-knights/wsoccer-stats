@@ -1,5 +1,12 @@
 import type React from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import html2canvas from "html2canvas";
 import "./App.css";
@@ -47,6 +54,14 @@ type Game = {
   cms: string;
   date: string;
   opponent: string;
+  // Registry slug for the opponent, resolved server-side by name
+  // matching. Null when the opponent name couldn't be matched (non-DI
+  // program, unusual spelling, etc.) — the schedule view then renders
+  // the opponent as plain text rather than a navigable link.
+  opponent_slug: string | null;
+  // Registry conference slug of the resolved opponent. Empty when the
+  // opponent couldn't be matched.
+  opponent_conference: string;
   home_away: string;
   result: GameResult | null;
 };
@@ -95,7 +110,7 @@ type RefreshEvent =
   | { phase: "step"; index: number; total: number; result: RefreshResult }
   | { phase: "finished"; ok: number; total: number };
 
-type Tab = "conferences" | "standings" | "leaders" | "today";
+type Tab = "conferences" | "standings" | "leaders" | "today" | "rpi";
 
 type UpcomingMatch = {
   program_slug: string;
@@ -144,7 +159,38 @@ function emitToast(msg: string): void {
 // registry's ``conferences.ndjson``). This module-level map is
 // populated once at app startup so all callers see the same labels
 // without threading them through props.
-let CONFERENCE_LABEL_MAP: Record<string, { label: string; full_name: string }> = {};
+//
+// Persisted via import.meta.hot.data so Vite's HMR module reloads
+// don't reset the map to {} between fetch and next re-render — the
+// useEffect that fetches conferences does not re-fire on HMR, so a
+// reset would leave labelFor() falling back to title-case ("Acc"
+// instead of "ACC") until the window is hard-reloaded.
+let CONFERENCE_LABEL_MAP: Record<string, { label: string; full_name: string }> =
+  (import.meta.hot?.data?.conferenceLabels as
+    | Record<string, { label: string; full_name: string }>
+    | undefined) ?? {};
+
+// Pub/sub so components that call labelFor()/fullNameFor() can re-render
+// when the backend fetch resolves (or when HMR reloads the module). Without
+// this, labelFor() would read the empty map on first paint and never update.
+const labelListeners = new Set<() => void>();
+function subscribeLabels(cb: () => void): () => void {
+  labelListeners.add(cb);
+  return () => {
+    labelListeners.delete(cb);
+  };
+}
+function getLabelSnapshot(): Record<string, { label: string; full_name: string }> {
+  return CONFERENCE_LABEL_MAP;
+}
+
+function useConferenceLabels(): void {
+  // Trigger a re-render whenever the module-level map changes. The
+  // snapshot itself is unused — labelFor()/fullNameFor() read the module
+  // var directly — but subscribing to it is what wires the component
+  // into the pub/sub.
+  useSyncExternalStore(subscribeLabels, getLabelSnapshot, getLabelSnapshot);
+}
 
 function setConferenceLabels(entries: ConferenceEntry[]): void {
   const next: Record<string, { label: string; full_name: string }> = {};
@@ -152,7 +198,21 @@ function setConferenceLabels(entries: ConferenceEntry[]): void {
     next[e.slug] = { label: e.label, full_name: e.full_name };
   }
   CONFERENCE_LABEL_MAP = next;
+  if (import.meta.hot) {
+    import.meta.hot.data.conferenceLabels = next;
+  }
+  labelListeners.forEach((cb) => cb());
 }
+
+// Kick off the fetch at module load so HMR reloads repopulate the map
+// without needing to wait for a BrowsePage useEffect that won't re-run.
+// Fire-and-forget: on failure, components fall back to the title-cased
+// slug — same behavior as before this fetch resolved.
+invoke<ConferenceEntry[]>("list_conferences")
+  .then(setConferenceLabels)
+  .catch(() => {
+    /* fetch failure is non-fatal; labelFor falls back */
+  });
 
 function labelFor(conf: string): string {
   const hit = CONFERENCE_LABEL_MAP[conf];
@@ -523,6 +583,21 @@ function App() {
           name={view.name}
           fromConference={view.fromConference}
           fromTab={view.fromTab}
+          onOpenRoster={(slug, name) =>
+            setView({
+              kind: "roster",
+              slug,
+              name,
+              // Preserve the original source so Back still lands where
+              // the user originally came from, rather than looping back
+              // through the previously-viewed opponent roster.
+              fromConference: view.fromConference,
+              fromTab: view.fromTab,
+            })
+          }
+          onOpenConference={(conf) =>
+            setView({ kind: "standings", conference: conf, tab: "standings" })
+          }
           onBack={() =>
             setView({
               kind: "standings",
@@ -552,6 +627,7 @@ function BrowsePage({
     fromTab: Tab
   ) => void;
 }) {
+  useConferenceLabels();
   const [conferences, setConferences] = useState<ConferenceEntry[]>([]);
   const [selected, setSelected] = useState<string>(initialConference);
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -576,6 +652,14 @@ function BrowsePage({
             active={tab === "today"}
             onClick={() => setTab("today")}
           />
+          <button
+            role="tab"
+            aria-selected={tab === "rpi"}
+            className={`tab ${tab === "rpi" ? "tab-active" : ""}`}
+            onClick={() => setTab("rpi")}
+          >
+            RPI
+          </button>
           <button
             role="tab"
             aria-selected={tab === "conferences"}
@@ -634,6 +718,15 @@ function BrowsePage({
         <TodayPage
           onOpenRoster={(slug, name) => onOpenRoster(slug, name, selected, tab)}
         />
+      ) : tab === "rpi" ? (
+        <RpiPage
+          conference={selected}
+          onOpenRoster={(slug, name) => onOpenRoster(slug, name, selected, tab)}
+          onOpenConference={(conf) => {
+            setSelected(conf);
+            setTab("standings");
+          }}
+        />
       ) : tab === "standings" ? (
         <StandingsPage
           conference={selected}
@@ -644,6 +737,10 @@ function BrowsePage({
         <LeadersPage
           conference={selected}
           onOpenRoster={(slug, name) => onOpenRoster(slug, name, selected, tab)}
+          onOpenConference={(conf) => {
+            setSelected(conf);
+            setTab("standings");
+          }}
         />
       )}
     </main>
@@ -833,6 +930,7 @@ function TodayPage({
   onOpenRoster: (slug: string, name: string) => void;
 }) {
   const { matches, today, now } = useUpcomingMatches(30_000);
+  const [query, setQuery] = useState("");
   const tomorrow = useMemo(() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
@@ -872,6 +970,20 @@ function TodayPage({
     return [...byPair.values()];
   }, [matches]);
 
+  // Filter by substring on either side of the matchup so typing part of
+  // a program's name narrows the list regardless of which column the
+  // program appears in.
+  const filtered = useMemo(() => {
+    if (!deduped) return deduped;
+    const q = query.trim().toLowerCase();
+    if (!q) return deduped;
+    return deduped.filter((m) => {
+      const left = (m.program_name || m.program_slug || "").toLowerCase();
+      const right = (m.opponent_name || m.opponent_slug || "").toLowerCase();
+      return left.includes(q) || right.includes(q);
+    });
+  }, [deduped, query]);
+
   if (matches === null) return <main className="container"><p>Loading…</p></main>;
   if (!deduped || deduped.length === 0) {
     return (
@@ -882,12 +994,25 @@ function TodayPage({
     );
   }
 
-  const dates = Array.from(new Set(deduped.map((m) => m.date))).sort();
+  const visible = filtered ?? [];
+  const dates = Array.from(new Set(visible.map((m) => m.date))).sort();
   const label = (d: string) => (d === today ? "Today" : d === tomorrow ? "Tomorrow" : d);
 
   return (
     <main className="container">
-      {dates.map((d) => (
+      <div className="toolbar">
+        <input
+          className="search"
+          type="search"
+          placeholder="Filter by program…"
+          aria-label="Filter matches by program name"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
+      {dates.length === 0 ? (
+        <p>No matches for “{query.trim()}”.</p>
+      ) : dates.map((d) => (
         <section key={d} className="today-section">
           <h2 className="section-heading">
             {label(d)}
@@ -904,7 +1029,7 @@ function TodayPage({
               </tr>
             </thead>
             <tbody>
-              {deduped
+              {visible
                 .filter((m) => m.date === d)
                 // Sort by resolved kickoff epoch (which already
                 // accounts for the school's timezone), then by the
@@ -2050,6 +2175,184 @@ function StandingsPage({
   );
 }
 
+// ---- rpi ----------------------------------------------------------------
+
+type RpiSortKey =
+  | "rpi_rank"
+  | "program_name"
+  | "conference"
+  | "rpi"
+  | "sos"
+  | "wins"
+  | "games_played";
+
+function RpiPage({
+  conference,
+  onOpenRoster,
+  onOpenConference,
+}: {
+  conference: string;
+  onOpenRoster: (slug: string, name: string) => void;
+  onOpenConference: (conference: string) => void;
+}) {
+  const [rows, setRows] = useState<Standing[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sort, toggleSort] = useSortSpec<RpiSortKey>();
+  const [query, setQuery] = useState<string>("");
+
+  useEffect(() => {
+    setRows(null);
+    setError(null);
+    // mode: "all" so RPI reflects the full-season record, not the
+    // conference-only slice the Standings tab defaults to. Conference
+    // filter still narrows which rows are shown but ranks remain
+    // global (computed by the backend over the full universe).
+    invoke<Standing[]>("list_standings", {
+      conference: conference || null,
+      mode: "all",
+    })
+      .then(setRows)
+      .catch((e) => setError(String(e)));
+  }, [conference]);
+
+  const sortedRows = useMemo(() => {
+    if (!rows) return rows;
+    const needle = query.trim().toLowerCase();
+    const filtered = rows.filter((r) => {
+      if (!r.has_schedule_data || r.rpi_rank === 0) return false;
+      if (!needle) return true;
+      return (r.program_name || r.program_slug).toLowerCase().includes(needle);
+    });
+    const effective: SortSpec<RpiSortKey> = sort ?? { key: "rpi_rank", dir: "asc" };
+    return applySort(filtered, effective, (row, key) => {
+      switch (key) {
+        case "conference":
+          return labelFor(row.conference);
+        case "program_name":
+          return row.program_name || row.program_slug;
+        default:
+          return row[key];
+      }
+    });
+  }, [rows, sort, query]);
+
+  return (
+    <>
+      <div className="toolbar">
+        <input
+          className="search"
+          type="search"
+          placeholder="Search teams…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
+      <p className="method-note">
+        NCAA DI women's soccer RPI across every DI team with ingested
+        schedule data. Ranks are computed over the full DI universe, so a
+        team's rank stays the same whether the conference filter is on or
+        off. Teams with no played games are hidden.
+      </p>
+      {error && (
+        <p className="error" role="alert">
+          Error: {error}
+        </p>
+      )}
+      {sortedRows === null && !error && <p>Loading…</p>}
+      {sortedRows !== null && sortedRows.length === 0 && !error && (
+        <p>No ranked teams for this selection.</p>
+      )}
+      {sortedRows !== null && sortedRows.length > 0 && (
+        <table className="standings">
+          <thead>
+            <tr>
+              <SortHeader
+                label="Rank"
+                sortKey="rpi_rank"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+              <SortHeader
+                label="Program"
+                sortKey="program_name"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+              <SortHeader
+                label="Conf"
+                sortKey="conference"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+              <SortHeader
+                label="RPI"
+                sortKey="rpi"
+                sort={sort}
+                onToggle={toggleSort}
+                title="Classical NCAA RPI value in [0, 1]"
+              />
+              <SortHeader
+                label="SOS"
+                sortKey="sos"
+                sort={sort}
+                onToggle={toggleSort}
+                title="Opponents' winning percentage with games vs this team excluded"
+              />
+              <SortHeader
+                label="Record"
+                sortKey="wins"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+              <SortHeader
+                label="GP"
+                sortKey="games_played"
+                sort={sort}
+                onToggle={toggleSort}
+              />
+            </tr>
+          </thead>
+          <tbody>
+            {sortedRows.map((s) => (
+              <tr key={s.program_slug}>
+                <td>{s.rpi_rank}</td>
+                <td>
+                  <button
+                    className="linklike"
+                    onClick={() =>
+                      onOpenRoster(s.program_slug, s.program_name || s.program_slug)
+                    }
+                    title={`Roster for ${s.program_name || s.program_slug}`}
+                  >
+                    {s.program_name || s.program_slug}
+                  </button>
+                </td>
+                <td>
+                  {s.conference ? (
+                    <button
+                      className="linklike"
+                      onClick={() => onOpenConference(s.conference)}
+                      title={`Open ${fullNameFor(s.conference)} standings`}
+                    >
+                      {labelFor(s.conference)}
+                    </button>
+                  ) : (
+                    labelFor(s.conference)
+                  )}
+                </td>
+                <td>{s.rpi.toFixed(4)}</td>
+                <td>{s.sos.toFixed(4)}</td>
+                <td>{`${s.wins}-${s.losses}-${s.ties}`}</td>
+                <td>{s.games_played}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
 // ---- leaders ------------------------------------------------------------
 
 type LeaderCategory =
@@ -2102,9 +2405,11 @@ function pickValue(row: LeaderRow, cat: LeaderCategory): number {
 function LeadersPage({
   conference,
   onOpenRoster,
+  onOpenConference,
 }: {
   conference: string;
   onOpenRoster: (slug: string, name: string) => void;
+  onOpenConference: (conference: string) => void;
 }) {
   const [category, setCategory] = useState<LeaderCategory>("goals");
   const [rows, setRows] = useState<LeaderRow[] | null>(null);
@@ -2176,7 +2481,19 @@ function LeadersPage({
                     {r.program_name || r.program_slug}
                   </button>
                 </td>
-                <td title={fullNameFor(r.conference)}>{labelFor(r.conference)}</td>
+                <td>
+                  {r.conference ? (
+                    <button
+                      className="linklike"
+                      onClick={() => onOpenConference(r.conference)}
+                      title={`Open ${fullNameFor(r.conference)} standings`}
+                    >
+                      {labelFor(r.conference)}
+                    </button>
+                  ) : (
+                    labelFor(r.conference)
+                  )}
+                </td>
                 <td>{pickValue(r, category)}</td>
               </tr>
             ))}
@@ -2317,20 +2634,28 @@ function RosterPage({
   name,
   fromConference,
   fromTab,
+  onOpenRoster,
+  onOpenConference,
   onBack,
 }: {
   slug: string;
   name: string;
   fromConference: string;
   fromTab: Tab;
+  onOpenRoster: (slug: string, name: string) => void;
+  onOpenConference: (conference: string) => void;
   onBack: () => void;
 }) {
+  useConferenceLabels();
   const [players, setPlayers] = useState<RosterEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sort, toggleSort] = useSortSpec<RosterSortKey>();
 
   const [games, setGames] = useState<Game[] | null>(null);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
+
+  const rosterRef = useRef<HTMLDivElement>(null);
+  const scheduleRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     invoke<RosterEntry[]>("list_roster", { slug })
@@ -2441,6 +2766,10 @@ function RosterPage({
           </p>
         </div>
       </header>
+      <div className="section-header">
+        <h2 className="section-heading">Roster</h2>
+        <ChartCopyButton target={rosterRef as React.RefObject<HTMLElement>} />
+      </div>
       {error && (
         <p className="error" role="alert">
           Error: {error}
@@ -2451,6 +2780,7 @@ function RosterPage({
         <p>No roster data for this program.</p>
       )}
       {sortedRows !== null && sortedRows.length > 0 && (
+        <div ref={rosterRef}>
         <table className="roster">
           <thead>
             <tr>
@@ -2593,9 +2923,13 @@ function RosterPage({
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
-      <h2 className="section-heading">Schedule</h2>
+      <div className="section-header">
+        <h2 className="section-heading">Schedule</h2>
+        <ChartCopyButton target={scheduleRef as React.RefObject<HTMLElement>} />
+      </div>
       {scheduleError && (
         <p className="error" role="alert">
           Error: {scheduleError}
@@ -2606,15 +2940,15 @@ function RosterPage({
         <p>No schedule data for this program.</p>
       )}
       {games !== null && games.length > 0 && (
+        <div ref={scheduleRef}>
         <FormTimeline games={games} />
-      )}
-      {games !== null && games.length > 0 && (
         <table className="schedule">
           <thead>
             <tr>
               <th>Date</th>
               <th>Home/Away</th>
               <th>Opponent</th>
+              <th>Conf</th>
               <th>Result</th>
             </tr>
           </thead>
@@ -2622,8 +2956,33 @@ function RosterPage({
             {games.map((g, i) => (
               <tr key={`${g.date}-${g.opponent}-${i}`}>
                 <td>{g.date}</td>
-                <td>{g.home_away === "away" ? "at" : g.home_away === "neutral" ? "vs (n)" : "vs"}</td>
-                <td>{g.opponent}</td>
+                <td>{g.home_away === "away" ? "Away" : g.home_away === "neutral" ? "Neutral" : "Home"}</td>
+                <td>
+                  {g.opponent_slug ? (
+                    <button
+                      className="linklike"
+                      onClick={() => onOpenRoster(g.opponent_slug!, g.opponent)}
+                      title={`Open ${g.opponent}`}
+                    >
+                      {g.opponent}
+                    </button>
+                  ) : (
+                    g.opponent
+                  )}
+                </td>
+                <td>
+                  {g.opponent_conference ? (
+                    <button
+                      className="linklike"
+                      onClick={() => onOpenConference(g.opponent_conference)}
+                      title={`Open ${fullNameFor(g.opponent_conference)} standings`}
+                    >
+                      {labelFor(g.opponent_conference)}
+                    </button>
+                  ) : (
+                    "—"
+                  )}
+                </td>
                 <td>
                   {g.result
                     ? `${g.result.outcome} ${g.result.team_score}-${g.result.opponent_score}`
@@ -2633,6 +2992,7 @@ function RosterPage({
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </main>
   );

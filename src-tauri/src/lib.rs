@@ -205,20 +205,34 @@ pub const PROGRAM_NAME_ALIASES: &[(&str, &str)] = &[
     ("Southern Mississippi", "southern_miss"),
     ("Hawai'i", "hawaii"),
     ("University of Louisiana at Monroe", "louisiana_monroe"),
+    ("JMU", "james_madison"),
 ];
 
-pub(crate) fn normalize_team_name(name: &str) -> String {
-    let trimmed = name.trim();
-    // Drop as many leading ranking tokens as we see. Each token is either
-    // ``#<something>`` (any non-space run after ``#`` — covers `#8`,
-    // `#T19`, `#8/4`, `#RV`), a parenthesized ``(#N)`` or ``(N)`` used by
-    // Texas A&M, a bare `RV` (receiving votes), or a bare `T<n>` tie
-    // marker. Keep chewing tokens until the next word looks like a real
-    // name.
-    let mut rest = trimmed;
+/// Strip a trailing parenthesized qualifier from a display name
+/// (``"Miami (ACC)"`` → ``"Miami"``). Virginia's SPA (and a handful of
+/// others) tags every conference opponent with the conference acronym
+/// in parens — we show the conference in its own column instead, so
+/// the opponent cell doesn't need it. Preserves whatever remains after
+/// the stripped tail.
+pub(crate) fn strip_trailing_paren(name: &str) -> &str {
+    let trimmed = name.trim_end();
+    if !trimmed.ends_with(')') {
+        return trimmed;
+    }
+    match trimmed.rfind('(') {
+        Some(open) => trimmed[..open].trim_end(),
+        None => trimmed,
+    }
+}
+
+/// Strip leading ranking tokens from a display name, preserving case
+/// and whatever remains after the last token. Used for schedule rows
+/// where the raw opponent string carries a poll rank ("#10 Tennessee")
+/// that we don't want to show.
+pub(crate) fn strip_rank_prefix(name: &str) -> &str {
+    let mut rest = name.trim();
     loop {
         let stripped = if let Some(after) = rest.strip_prefix('#') {
-            // ``#<token> <name>``
             let (_, tail) = split_once_ws(after);
             tail
         } else if let Some(after) = strip_paren_ranking(rest) {
@@ -239,16 +253,60 @@ pub(crate) fn normalize_team_name(name: &str) -> String {
         }
         rest = stripped;
     }
+    rest
+}
+
+pub(crate) fn normalize_team_name(name: &str) -> String {
+    // Share the ranking-prefix loop with the display-name path so a
+    // new prefix shape only has to be taught in one place. Also drop
+    // any trailing "(ACC)"-style conference tag so the lookup matches
+    // registry names.
+    let rest = strip_rank_prefix(name);
+    let rest = strip_trailing_paren(rest);
     let lower = rest.to_lowercase();
     // Strip leading "university of " / "univ. of " / "univ of ". Some
     // schedules (Pepperdine's) write opponents as "University of
     // Portland" while the registry name is just "Portland" — without
     // this strip the conference lookup misses.
     let lower = strip_university_of_prefix(&lower);
+    // Strip a trailing " university" / " univ." / " univ" so Ivy opponents
+    // written as "Yale University" match registry name "Yale". Only
+    // strip when the remainder has at least one preceding word so a
+    // program literally named just "University" doesn't collapse.
+    let lower = strip_trailing_university(&lower);
+    // Expand a leading "st. "/"st " to "saint " so schedule variants
+    // ("St. Mary's", "St John's") match registry entries that spell the
+    // long form ("Saint Mary's") AND registry entries that spell the
+    // short form ("St. John's") — applying the same rewrite to both
+    // sides keeps lookups symmetric regardless of which form each uses.
+    let lower = expand_leading_st_to_saint(&lower);
     // Collapse "St." → "State" so "Missouri St." matches "Missouri State".
     // Match whole words only: replace " st." and " st" at end-of-string
     // (case-insensitive, but ``lower`` is already lowercased).
     expand_st_abbreviation(&lower)
+}
+
+fn strip_trailing_university(s: &str) -> String {
+    for suffix in [" university", " univ.", " univ"] {
+        if let Some(head) = s.strip_suffix(suffix) {
+            let head_trimmed = head.trim_end();
+            if !head_trimmed.is_empty() {
+                return head_trimmed.to_string();
+            }
+        }
+    }
+    s.to_string()
+}
+
+fn expand_leading_st_to_saint(s: &str) -> String {
+    for prefix in ["st. ", "st "] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            if !rest.is_empty() {
+                return format!("saint {rest}");
+            }
+        }
+    }
+    s.to_string()
 }
 
 fn strip_university_of_prefix(s: &str) -> String {
@@ -1510,8 +1568,35 @@ async fn refresh_data(
 /// Sorted by ISO date ascending — the producer typically writes them that
 /// way already, but re-sort explicitly so the caller doesn't depend on
 /// filesystem line order.
+/// Schedule row with the opponent name resolved to a registry slug when
+/// possible, so the frontend can link each row back to that program's
+/// own page. `opponent_slug` is `None` when the name can't be matched
+/// against the registry or any seen schedule — the frontend falls back
+/// to rendering the raw name without a link in that case.
+///
+/// `opponent` is the display name with the (transient) poll rank and
+/// any trailing "(ACC)" conference tag stripped — rankings change week
+/// to week and the conference lives in its own column, so neither
+/// belongs in the opponent cell.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScheduleGame {
+    pub program_slug: String,
+    pub program_name: String,
+    pub conference: String,
+    pub cms: String,
+    pub date: String,
+    pub opponent: String,
+    pub opponent_slug: Option<String>,
+    /// Registry conference slug of the resolved opponent (e.g. "sec").
+    /// Empty when the opponent couldn't be matched to a registry
+    /// program. Frontend labelFor() turns this into the display label.
+    pub opponent_conference: String,
+    pub home_away: String,
+    pub result: Option<GameResult>,
+}
+
 #[tauri::command]
-fn list_schedule(slug: String) -> Result<Vec<Game>, String> {
+fn list_schedule(slug: String) -> Result<Vec<ScheduleGame>, String> {
     validate_slug(&slug)?;
     let path = schedules_dir().join(format!("{slug}.ndjson"));
     if !path.exists() {
@@ -1520,7 +1605,76 @@ fn list_schedule(slug: String) -> Result<Vec<Game>, String> {
     let mut games = data::read_ndjson_file(&path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     games.sort_by(|a, b| a.date.cmp(&b.date));
-    Ok(games)
+
+    // Build name → (slug, conference) lookup the same way other views
+    // do so opponent resolution is consistent across the app. Seed
+    // order: registry first, then every seen schedule (picks up name
+    // variants that only live in schedule data), then the hardcoded
+    // PROGRAM_NAME_ALIASES for display-name forms absent from the
+    // registry.
+    let registry = load_program_registry();
+    let all_games = load_games().unwrap_or_default();
+    let mut name_to_slug: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut slug_to_conf: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for p in &registry {
+        name_to_slug
+            .entry(normalize_team_name(&p.name))
+            .or_insert_with(|| p.slug.clone());
+        if !p.conference.is_empty() {
+            slug_to_conf
+                .entry(p.slug.clone())
+                .or_insert_with(|| p.conference.clone());
+        }
+    }
+    for g in &all_games {
+        if !g.program_name.is_empty() {
+            name_to_slug
+                .entry(normalize_team_name(&g.program_name))
+                .or_insert_with(|| g.program_slug.clone());
+        }
+        if !g.conference.is_empty() {
+            slug_to_conf
+                .entry(g.program_slug.clone())
+                .or_insert_with(|| g.conference.clone());
+        }
+    }
+    for (alias, slug) in PROGRAM_NAME_ALIASES.iter().copied() {
+        name_to_slug
+            .entry(normalize_team_name(alias))
+            .or_insert_with(|| slug.to_string());
+    }
+
+    Ok(games
+        .into_iter()
+        .map(|g| {
+            let opponent_slug = name_to_slug
+                .get(&normalize_team_name(&g.opponent))
+                .cloned();
+            let opponent_conference = opponent_slug
+                .as_ref()
+                .and_then(|s| slug_to_conf.get(s).cloned())
+                .unwrap_or_default();
+            // Strip (transient) poll rank and the trailing "(ACC)"
+            // conference tag for display — rankings change weekly and
+            // the conference has its own column.
+            let display_opponent =
+                strip_trailing_paren(strip_rank_prefix(&g.opponent)).to_string();
+            ScheduleGame {
+                program_slug: g.program_slug,
+                program_name: g.program_name,
+                conference: g.conference,
+                cms: g.cms,
+                date: g.date,
+                opponent: display_opponent,
+                opponent_slug,
+                opponent_conference,
+                home_away: g.home_away,
+                result: g.result,
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]

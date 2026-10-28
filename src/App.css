@@ -30,6 +30,14 @@
   --form-loss: #c53838;
   --form-tie: #808080;
   --form-outline: #999;
+  /* Tinted overlays — kept as plain rgba() rather than color-mix() so
+     html2canvas's screenshot/copy path can parse them. Opacities match
+     the previous color-mix percentages. */
+  --row-selected-bg: rgba(57, 108, 216, 0.12);
+  --row-live-bg: rgba(229, 57, 53, 0.08);
+  --h2h-win-bg: rgba(45, 143, 61, 0.25);
+  --h2h-loss-bg: rgba(197, 56, 56, 0.22);
+  --h2h-tie-bg: rgba(128, 128, 128, 0.25);
 
   color: var(--text);
   background-color: var(--bg);
@@ -95,6 +103,11 @@
   --form-loss: var(--dark-form-loss);
   --form-tie: var(--dark-form-tie);
   --form-outline: var(--dark-form-outline);
+  --row-selected-bg: rgba(126, 166, 255, 0.18);
+  --row-live-bg: rgba(229, 57, 53, 0.14);
+  --h2h-win-bg: rgba(109, 214, 120, 0.25);
+  --h2h-loss-bg: rgba(255, 139, 139, 0.22);
+  --h2h-tie-bg: rgba(170, 170, 170, 0.25);
 }
 
 /* OS preference is dark AND user hasn't overridden to light. */
@@ -119,6 +132,15 @@
     --error-bg: var(--dark-error-bg);
     --error-text: var(--dark-error-text);
     --error-border: var(--dark-error-border);
+    --form-win: var(--dark-form-win);
+    --form-loss: var(--dark-form-loss);
+    --form-tie: var(--dark-form-tie);
+    --form-outline: var(--dark-form-outline);
+    --row-selected-bg: rgba(126, 166, 255, 0.18);
+    --row-live-bg: rgba(229, 57, 53, 0.14);
+    --h2h-win-bg: rgba(109, 214, 120, 0.25);
+    --h2h-loss-bg: rgba(255, 139, 139, 0.22);
+    --h2h-tie-bg: rgba(170, 170, 170, 0.25);
   }
 }
 
@@ -301,6 +323,18 @@ table.leaders th {
   color: var(--heading);
 }
 
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 24px 0 8px;
+}
+
+.section-header .section-heading {
+  margin: 0;
+}
+
 .form-timeline {
   margin: 4px 0 12px;
   overflow-x: auto;
@@ -406,7 +440,7 @@ table.leaders th {
 
 .standings tbody tr.row-selected,
 .standings tbody tr.row-selected:nth-child(even) {
-  background: color-mix(in srgb, var(--link) 12%, transparent);
+  background: var(--row-selected-bg);
 }
 
 /* Live indicator — pulsing red dot on the Today tab button when any
@@ -480,7 +514,7 @@ table.today-matches tbody tr:nth-child(even) {
 }
 
 .today-row-live {
-  background: color-mix(in srgb, #e53935 8%, transparent) !important;
+  background: var(--row-live-bg) !important;
 }
 
 .today-venue {
@@ -510,6 +544,11 @@ table.today-matches tbody tr:nth-child(even) {
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
   font-size: 0.8rem;
+  /* Fill the chart-block so the matrix lines up with the GF/GA and
+     SoS/RPI scatters above it; `min-width: 44px` on the cells still
+     lets the matrix overflow (horizontal scroll in the wrapper) when
+     a wide conference needs more room. */
+  width: 100%;
 }
 
 .h2h-matrix th,
@@ -580,18 +619,18 @@ table.today-matches tbody tr:nth-child(even) {
 }
 
 .h2h-w {
-  background: color-mix(in srgb, var(--form-win) 25%, transparent);
+  background: var(--h2h-win-bg);
   color: var(--text);
   font-weight: 600;
 }
 
 .h2h-l {
-  background: color-mix(in srgb, var(--form-loss) 22%, transparent);
+  background: var(--h2h-loss-bg);
   color: var(--text);
 }
 
 .h2h-t {
-  background: color-mix(in srgb, var(--form-tie) 25%, transparent);
+  background: var(--h2h-tie-bg);
   color: var(--text);
 }
 
