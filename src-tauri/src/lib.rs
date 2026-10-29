@@ -1622,6 +1622,7 @@ pub enum RefreshEvent {
 #[tauri::command]
 async fn refresh_data(
     conference: Option<String>,
+    kinds: Option<Vec<String>>,
     on_progress: tauri::ipc::Channel<RefreshEvent>,
 ) -> Result<Vec<RefreshResult>, String> {
     let aip = aip_dir();
@@ -1633,29 +1634,36 @@ async fn refresh_data(
     }
     let output_dir = aip.join("output");
 
-    // Build the (kind, conference_scope) work list. `""` means no
-    // ``--conference`` filter (process every D1 program).
+    // Pick which subprocesses to run. Caller-supplied ``kinds`` wins
+    // so the frontend can skip the heavy stats pass (and sometimes
+    // the roster ingest too) when the current view doesn't display
+    // that data. Default — when the caller passes nothing — is the
+    // full set, preserving backwards-compat.
     //
     // The aip CLI uses subcommand names: ``ingest`` for rosters,
     // ``schedule`` for schedules, ``stats`` for per-player stats.
-    let mut jobs: Vec<(&'static str, String)> = Vec::new();
-    match conference.as_deref().filter(|c| !c.is_empty()) {
-        Some(c) => {
-            jobs.push(("ingest", c.to_string()));
-            jobs.push(("schedule", c.to_string()));
-            jobs.push(("stats", c.to_string()));
+    let allowed_kinds: &[&'static str] = &["ingest", "schedule", "stats"];
+    let selected_kinds: Vec<&'static str> = match kinds {
+        Some(ref caller_kinds) if !caller_kinds.is_empty() => {
+            let mut out = Vec::new();
+            for want in caller_kinds {
+                match allowed_kinds.iter().find(|k| *k == want) {
+                    Some(k) => out.push(*k),
+                    None => return Err(format!("unknown refresh kind: {want:?}")),
+                }
+            }
+            out
         }
-        None => {
-            // Every kind covers EVERY D1 program — with 20 workers
-            // each pass runs in under a minute, and a user opening a
-            // CAA team's roster expects to see the same stats we
-            // surface for a P4/WCC team. Single subprocess per kind
-            // is faster than 31 per-conference calls.
-            jobs.push(("ingest", String::new()));
-            jobs.push(("schedule", String::new()));
-            jobs.push(("stats", String::new()));
-        }
-    }
+        _ => allowed_kinds.to_vec(),
+    };
+
+    // Build the (kind, conference_scope) work list. `""` means no
+    // ``--conference`` filter (process every D1 program).
+    let conf_scope = conference.as_deref().filter(|c| !c.is_empty()).map(String::from);
+    let jobs: Vec<(&'static str, String)> = selected_kinds
+        .into_iter()
+        .map(|k| (k, conf_scope.clone().unwrap_or_default()))
+        .collect();
 
     let total = jobs.len();
     let _ = on_progress.send(RefreshEvent::Started { total });

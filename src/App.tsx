@@ -580,6 +580,18 @@ function App() {
           });
         }
       };
+      // Scope the subprocess set to what the current view actually
+      // displays. Schedule is always needed (it feeds Today / Standings
+      // / RPI / Conferences). Roster ingest and the heavy stats pass
+      // only matter on views that render per-player data — the Leaders
+      // tab and any program's roster page.
+      const effectiveTab: Tab | null =
+        view.kind === "standings" ? view.tab : view.fromTab;
+      const needsPlayerData =
+        view.kind === "roster" || effectiveTab === "leaders";
+      const kinds = needsPlayerData
+        ? ["ingest", "schedule", "stats"]
+        : ["schedule"];
       const results = await invoke<
         { kind: string; conference: string; ok: boolean; summary: string }[]
       >("refresh_data", {
@@ -587,6 +599,7 @@ function App() {
           view.kind === "standings"
             ? view.conference || null
             : view.fromConference || null,
+        kinds,
         onProgress: channel,
       });
       const ok = results.filter((r) => r.ok).length;
