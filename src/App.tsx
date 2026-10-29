@@ -724,7 +724,7 @@ function RefreshButton({
       className="refresh-btn"
       disabled={busy}
       onClick={onClick}
-      title="Refresh from live sites"
+      title="Refresh from live sites (⌘/Ctrl + Shift + R)"
       aria-label="Refresh data from live sites"
     >
       <span className={busy ? "refresh-icon spinning" : "refresh-icon"}>
@@ -751,7 +751,7 @@ function RefreshPlayerDataButton({
       className="refresh-btn"
       disabled={busy}
       onClick={onClick}
-      title="Refresh rosters and per-player stats"
+      title="Refresh rosters and per-player stats (⌘/Ctrl + Shift + S)"
       aria-label="Refresh rosters and per-player stats"
     >
       <span className={busy ? "refresh-icon spinning" : "refresh-icon"}>
@@ -953,6 +953,25 @@ function App() {
     view.kind === "standings" ? view.tab : view.fromTab;
   const showPlayerDataRefresh =
     view.kind === "roster" || effectiveTab === "leaders";
+  // ⌘/Ctrl + Shift + R — trigger the main (schedule-only) refresh
+  // from anywhere. Shift keeps it clear of the browser/webview's
+  // own ⌘R "reload" so dev workflows still work. Add the player-
+  // data refresh (⌘/Ctrl + Shift + S) on the views that expose
+  // that button so power users don't have to mouse-over for stats.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
+      if (e.key === "R" || e.key === "r") {
+        e.preventDefault();
+        refresh();
+      } else if ((e.key === "S" || e.key === "s") && showPlayerDataRefresh) {
+        e.preventDefault();
+        refreshPlayerData();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [refresh, refreshPlayerData, showPlayerDataRefresh]);
   return (
     <>
       <div className="top-actions">
