@@ -1054,6 +1054,10 @@ fn list_todays_matches(today: String) -> Result<Vec<UpcomingMatch>, String> {
     // conversion to the user's local time on the frontend.
     let mut slug_to_tz: std::collections::HashMap<String, &'static str> =
         std::collections::HashMap::new();
+    // slug → conference used so alias entries (which only know the
+    // slug) can look up the conference without being authored twice.
+    let mut slug_to_conf: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for g in &all_games {
         if !g.program_name.is_empty() {
             let k = normalize_team_name(&g.program_name);
@@ -1062,12 +1066,36 @@ fn list_todays_matches(today: String) -> Result<Vec<UpcomingMatch>, String> {
                 name_to_conf.entry(k).or_insert_with(|| g.conference.clone());
             }
         }
+        if !g.conference.is_empty() {
+            slug_to_conf
+                .entry(g.program_slug.clone())
+                .or_insert_with(|| g.conference.clone());
+        }
     }
     for p in &registry {
         let k = normalize_team_name(&p.name);
         name_to_slug.entry(k.clone()).or_insert_with(|| p.slug.clone());
         name_to_conf.entry(k).or_insert_with(|| p.conference.clone());
         slug_to_tz.insert(p.slug.clone(), state_to_iana_tz(&p.state));
+        if !p.conference.is_empty() {
+            slug_to_conf
+                .entry(p.slug.clone())
+                .or_insert_with(|| p.conference.clone());
+        }
+    }
+    // Add hardcoded aliases so opponent names that only appear on
+    // schedule pages (never as a program's own name) still resolve.
+    // Without this, Today-view rows for games like "Grambling vs
+    // University of Arkansas - Pine Bluff" fail to pair with the
+    // reverse row and the home team's kickoff/broadcast info is lost.
+    for (alias, slug) in PROGRAM_NAME_ALIASES.iter().copied() {
+        let k = normalize_team_name(alias);
+        name_to_slug
+            .entry(k.clone())
+            .or_insert_with(|| slug.to_string());
+        if let Some(conf) = slug_to_conf.get(slug) {
+            name_to_conf.entry(k).or_insert_with(|| conf.clone());
+        }
     }
 
     let mut rows: Vec<UpcomingMatch> = Vec::new();
@@ -1424,6 +1452,15 @@ pub struct RefreshResult {
     pub summary: String,
 }
 
+/// Pull the leading N out of ``Done in 22.4s: 353/354 succeeded, …``.
+/// Returns ``None`` when the summary doesn't match that shape (older
+/// aip CLI versions or an entirely different error path).
+fn parse_done_in_successes(summary: &str) -> Option<u32> {
+    let after = summary.split(": ").nth(1)?;
+    let num = after.split('/').next()?.trim();
+    num.parse::<u32>().ok()
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
 pub enum RefreshEvent {
@@ -1529,12 +1566,33 @@ async fn refresh_data(
         .map_err(|e| format!("spawn failed for {kind}/{conf}: {e}"))?;
 
         let stderr = String::from_utf8_lossy(&output.stderr);
+        // Prefer the aip CLI's "Done in …: N/M succeeded, …" line as the
+        // summary — it names the actual counts. The absolute last line
+        // is "Output: output/" which conveys nothing. Fall back to the
+        // last non-empty line only when no "Done in " line is present.
         let summary = stderr
             .lines()
             .filter(|l| !l.trim().is_empty())
-            .next_back()
-            .unwrap_or("")
-            .to_string();
+            .rev()
+            .find(|l| l.trim_start().starts_with("Done in "))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                stderr
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .next_back()
+                    .unwrap_or("")
+                    .to_string()
+            });
+        // The aip CLI returns exit code 1 if ANY single program fails,
+        // even when 353 of 354 succeed. Treating that as "step failed"
+        // alarms the user over a trickle of unparseable SPAs. If the
+        // summary parses as "N/M succeeded" with N > 0, call the step
+        // successful — the summary line itself names how many failed so
+        // users still see the real number.
+        let parsed_successes = parse_done_in_successes(&summary);
+        let ok = output.status.success()
+            || parsed_successes.map(|n| n > 0).unwrap_or(false);
         let result = RefreshResult {
             kind: kind.to_string(),
             // Preserve "all D1" as an empty string in the payload so
@@ -1545,7 +1603,7 @@ async fn refresh_data(
             } else {
                 conf.clone()
             },
-            ok: output.status.success(),
+            ok,
             summary,
         };
         let _ = on_progress.send(RefreshEvent::Step {

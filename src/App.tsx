@@ -498,12 +498,19 @@ function App() {
         if (msg.phase === "started") {
           setProgress({ done: 0, total: msg.total, label: "Starting…" });
         } else if (msg.phase === "step") {
+          // Pull the "N/M succeeded, …" fragment out of the aip CLI's
+          // "Done in 22.4s: 353/354 succeeded, 6780 games, …" so the
+          // progress label is informative — otherwise a 353/354 run
+          // reads as "(failed)" with no explanation.
+          const detail = msg.result.summary
+            .replace(/^Done in [^:]+:\s*/, "")
+            .trim();
           setProgress({
             done: msg.index,
             total: msg.total,
             label: `${msg.result.conference} · ${msg.result.kind}${
               msg.result.ok ? "" : " (failed)"
-            }`,
+            }${detail ? ` · ${detail}` : ""}`,
           });
         } else if (msg.phase === "finished") {
           setProgress({
@@ -955,6 +962,16 @@ function TodayPage({
         nameToSlug.set(normalizeName(m.program_name), m.program_slug);
       }
     }
+    // Score each row by how much useful detail it carries: broadcast
+    // link, broadcast channel, and kickoff time are each worth a point.
+    // The row with the higher score wins the matchup; ties go to the
+    // home team. This way a null-everything home row doesn't shadow a
+    // populated away row (common on SWAC/MEAC games where only one
+    // program's SPA emits broadcast details).
+    const detailScore = (m: UpcomingMatch): number =>
+      (m.broadcast_url ? 1 : 0) +
+      (m.broadcast_channel ? 1 : 0) +
+      (m.kickoff_time ? 1 : 0);
     const byPair = new Map<string, UpcomingMatch>();
     for (const m of matches) {
       const oppSlug =
@@ -962,8 +979,15 @@ function TodayPage({
       const oppKey = oppSlug ?? "name:" + normalizeName(m.opponent_name);
       const key = [m.program_slug, oppKey].sort().join("|") + "|" + m.date;
       const existing = byPair.get(key);
-      const isHome = m.home_away === "home";
-      if (!existing || (isHome && existing.home_away !== "home")) {
+      if (!existing) {
+        byPair.set(key, m);
+        continue;
+      }
+      const newScore = detailScore(m);
+      const oldScore = detailScore(existing);
+      if (newScore > oldScore) {
+        byPair.set(key, m);
+      } else if (newScore === oldScore && m.home_away === "home" && existing.home_away !== "home") {
         byPair.set(key, m);
       }
     }
