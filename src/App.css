@@ -734,6 +734,79 @@ a.external-link:hover {
   white-space: nowrap;
 }
 
+.ingest-issues {
+  position: relative;
+  font-size: 0.78rem;
+}
+
+.ingest-issues > summary {
+  cursor: pointer;
+  padding: 3px 8px;
+  color: var(--text-muted);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  user-select: none;
+  list-style: none;
+}
+
+.ingest-issues > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ingest-issues > summary:hover {
+  color: var(--text);
+  background: var(--header-hover);
+}
+
+.ingest-issues[open] > summary {
+  color: var(--text);
+}
+
+.ingest-issues-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 8px;
+  max-height: 60vh;
+  overflow-y: auto;
+  min-width: 420px;
+  max-width: 70vw;
+}
+
+.ingest-issues-list table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.ingest-issues-list th {
+  text-align: left;
+  padding: 4px 8px;
+  color: var(--text-muted);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--input-bg);
+}
+
+.ingest-issues-list td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--stripe);
+}
+
+.ingest-issues-error {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+}
+
 .theme-toggle,
 .screenshot-btn,
 .refresh-btn {

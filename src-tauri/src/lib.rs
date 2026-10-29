@@ -2143,6 +2143,96 @@ fn list_schedule(slug: String) -> Result<Vec<ScheduleGame>, String> {
         .collect())
 }
 
+/// One program that failed to ingest in the most recent run of a
+/// given kind (roster / schedule / stats). The aip CLI writes these
+/// as TSV in ``output/errors.tsv`` / ``schedule_errors.tsv`` /
+/// ``stats_errors.tsv``; we merge them so the UI can show a single
+/// "ingest issues" list.
+#[derive(Debug, Clone, Serialize)]
+pub struct IngestIssue {
+    /// Which pipeline reported this failure. One of: ``roster``,
+    /// ``schedule``, ``stats``.
+    pub kind: String,
+    pub program_slug: String,
+    /// Resolved from the registry when possible; falls back to the
+    /// slug for programs the registry doesn't carry.
+    pub program_name: String,
+    /// Empty when the error happened before CMS detection ran.
+    pub cms: String,
+    pub error: String,
+}
+
+fn read_error_tsv(path: &std::path::Path, kind: &str) -> Vec<IngestIssue> {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut lines = contents.lines();
+    // Skip the TSV header row.
+    lines.next();
+    let mut out = Vec::new();
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut parts = line.split('\t');
+        let program_slug = parts.next().unwrap_or("").to_string();
+        let cms = parts.next().unwrap_or("").to_string();
+        let error = parts.collect::<Vec<_>>().join("\t");
+        if program_slug.is_empty() {
+            continue;
+        }
+        out.push(IngestIssue {
+            kind: kind.to_string(),
+            program_slug,
+            program_name: String::new(),
+            cms,
+            error,
+        });
+    }
+    out
+}
+
+/// Load the three *_errors.tsv files the aip CLI writes after each
+/// ingest and merge them into a single list. The UI surfaces this
+/// alongside the Refresh button so users can see which specific
+/// programs the current pipeline can't handle rather than being
+/// told "353/354 succeeded" with no way to find the 1 failure.
+#[tauri::command]
+fn list_ingest_issues() -> Result<Vec<IngestIssue>, String> {
+    let dir = data_dir();
+    let mut issues = Vec::new();
+    issues.extend(read_error_tsv(&dir.join("errors.tsv"), "roster"));
+    issues.extend(read_error_tsv(&dir.join("schedule_errors.tsv"), "schedule"));
+    issues.extend(read_error_tsv(&dir.join("stats_errors.tsv"), "stats"));
+
+    // Resolve program names from the registry for display.
+    let registry = load_program_registry();
+    let name_by_slug: std::collections::HashMap<String, String> = registry
+        .iter()
+        .map(|p| (p.slug.clone(), p.name.clone()))
+        .collect();
+    for issue in &mut issues {
+        if issue.program_name.is_empty() {
+            issue.program_name = name_by_slug
+                .get(&issue.program_slug)
+                .cloned()
+                .unwrap_or_else(|| issue.program_slug.clone());
+        }
+    }
+
+    // Sort by program name so the list reads alphabetically within
+    // the UI; group by kind for anyone scanning for a specific
+    // pipeline. Secondary key is kind so ``roster`` sorts before
+    // ``schedule`` before ``stats`` for a given program.
+    issues.sort_by(|a, b| {
+        a.program_name
+            .to_lowercase()
+            .cmp(&b.program_name.to_lowercase())
+            .then_with(|| a.kind.cmp(&b.kind))
+    });
+    Ok(issues)
+}
+
 #[cfg(test)]
 mod name_norm_tests {
     use super::normalize_team_name as n;
@@ -2309,7 +2399,8 @@ pub fn run() {
             list_leaders,
             refresh_data,
             refresh_schedules_for_slugs,
-            fetch_live_scoreboard
+            fetch_live_scoreboard,
+            list_ingest_issues
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

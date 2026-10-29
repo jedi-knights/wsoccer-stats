@@ -478,6 +478,65 @@ function LastRefreshedBadge() {
   );
 }
 
+type IngestIssue = {
+  kind: string; // "roster" | "schedule" | "stats"
+  program_slug: string;
+  program_name: string;
+  cms: string;
+  error: string;
+};
+
+/// Disclosure button showing a count of programs that failed to
+/// ingest in the most recent run, expanding to the full per-program
+/// error list. Re-fetches whenever the global data revision bumps so
+/// the panel reflects the latest refresh outcome.
+function IngestIssuesPanel({ dataRevision }: { dataRevision: number }) {
+  const [issues, setIssues] = useState<IngestIssue[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    invoke<IngestIssue[]>("list_ingest_issues")
+      .then((rows) => {
+        if (!cancelled) setIssues(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setIssues([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dataRevision]);
+  if (!issues || issues.length === 0) return null;
+  return (
+    <details className="ingest-issues">
+      <summary title="Programs the ingest pipeline couldn't parse — click to expand">
+        {issues.length} issue{issues.length === 1 ? "" : "s"}
+      </summary>
+      <div className="ingest-issues-list">
+        <table>
+          <thead>
+            <tr>
+              <th>Program</th>
+              <th>Kind</th>
+              <th>CMS</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody>
+            {issues.map((i, idx) => (
+              <tr key={`${i.kind}-${i.program_slug}-${idx}`}>
+                <td>{i.program_name}</td>
+                <td>{i.kind}</td>
+                <td>{i.cms || "—"}</td>
+                <td className="ingest-issues-error">{i.error || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+
 function ScreenshotButton({ onDone }: { onDone: (status: string) => void }) {
   const [busy, setBusy] = useState(false);
   return (
@@ -692,6 +751,7 @@ function App() {
     <>
       <div className="top-actions">
         <LastRefreshedBadge />
+        <IngestIssuesPanel dataRevision={dataRevision} />
         <RefreshButton busy={refreshing} onClick={refresh} />
         <ScreenshotButton onDone={showToast} />
         <ThemeToggle theme={theme} onToggle={toggleTheme} />
