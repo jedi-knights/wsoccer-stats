@@ -168,6 +168,17 @@ function emitToast(msg: string): void {
   if (TOAST_EMITTER) TOAST_EMITTER(msg);
 }
 
+// Module-level "data was refreshed on disk" emitter. The Today view's
+// background poll re-ingests schedules as soon as ESPN flips a game to
+// final; when that completes it bumps this emitter so Standings /
+// Schedule / Roster views re-fetch and reflect the new result without
+// the user clicking the manual refresh button.
+let DATA_REVISION_EMITTER: (() => void) | null = null;
+
+function emitDataRevisionBump(): void {
+  if (DATA_REVISION_EMITTER) DATA_REVISION_EMITTER();
+}
+
 // Conference labels come from the backend (sourced from the aip
 // registry's ``conferences.ndjson``). This module-level map is
 // populated once at app startup so all callers see the same labels
@@ -495,6 +506,12 @@ function App() {
     tab: "conferences",
   });
   const [dataRevision, setDataRevision] = useState(0);
+  useEffect(() => {
+    DATA_REVISION_EMITTER = () => setDataRevision((n) => n + 1);
+    return () => {
+      DATA_REVISION_EMITTER = null;
+    };
+  }, []);
   const [refreshing, setRefreshing] = useState(false);
   const [progress, setProgress] = useState<{
     done: number;
@@ -970,6 +987,12 @@ function TodayPage({
     return matches.filter((m) => isMatchLive(m, now)).length;
   }, [matches, now]);
   const scoreboardInFlight = useRef(false);
+  // Track which ESPN event IDs we've already triggered a schedule
+  // re-ingest for after they transitioned to final. Prevents a game
+  // that stays on `post` from being re-ingested every poll tick for
+  // the rest of the day.
+  const reingestedPostEvents = useRef(new Set<string>());
+  const reingestInFlight = useRef(false);
   useEffect(() => {
     if (matches === null) return;
     const yyyymmdd = (iso: string) => iso.replace(/-/g, "");
@@ -981,6 +1004,46 @@ function TodayPage({
           date: yyyymmdd(today),
         });
         setScoreboard(rows);
+        // Any newly-final event needs a CMS schedule re-ingest so the
+        // standings table, program schedule, and roster view all
+        // reflect the result (they read the ingested NDJSON on mount
+        // and don't know about ESPN). We do this at most once per
+        // event id to avoid hammering the aip CLI.
+        const newPosts = rows.filter(
+          (r) =>
+            r.state === "post" && !reingestedPostEvents.current.has(r.id),
+        );
+        if (newPosts.length > 0 && !reingestInFlight.current) {
+          const slugs = Array.from(
+            new Set(
+              newPosts.flatMap((r) => [r.home_slug, r.away_slug]).filter(Boolean),
+            ),
+          );
+          if (slugs.length > 0) {
+            reingestInFlight.current = true;
+            // Record before awaiting so overlapping ticks don't
+            // re-queue the same event.
+            for (const r of newPosts)
+              reingestedPostEvents.current.add(r.id);
+            invoke("refresh_schedules_for_slugs", { slugs })
+              .then(() => {
+                // Bump the global data revision so Standings /
+                // Schedule / Roster pages re-fetch their NDJSON.
+                emitDataRevisionBump();
+              })
+              .catch(() => {
+                // Allow retrying on the next poll tick if the ingest
+                // genuinely failed (not just "no new result on CMS
+                // yet" — in that case we re-ingested but nothing
+                // changed, which is fine).
+                for (const r of newPosts)
+                  reingestedPostEvents.current.delete(r.id);
+              })
+              .finally(() => {
+                reingestInFlight.current = false;
+              });
+          }
+        }
       } catch {
         // Swallow — scoreboard failures (network blip, ESPN hiccup)
         // shouldn't surface a toast. Next tick retries.
