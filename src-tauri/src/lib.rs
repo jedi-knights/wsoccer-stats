@@ -1660,6 +1660,14 @@ async fn refresh_data(
     let total = jobs.len();
     let _ = on_progress.send(RefreshEvent::Started { total });
 
+    // Bump the aip CLI's default worker count. Each ingest subprocess
+    // is almost entirely waiting on remote HTTP (sidearm / wmt / presto /
+    // wp schedule and roster pages), so doubling the fetch concurrency
+    // nearly doubles throughput before anything starts rate-limiting.
+    // 40 is well below what sidearm.com will throttle on and still
+    // leaves headroom; raise further only after measuring.
+    const INGEST_WORKERS: &str = "40";
+
     // Run the three ingest subprocesses in parallel. They write to
     // disjoint output subdirs (``rosters/`` / ``schedules/`` / ``stats/``)
     // and don't consume each other's output; the one shared file both
@@ -1667,7 +1675,8 @@ async fn refresh_data(
     // identically from the same registry source, so a last-writer-wins
     // race is content-safe. On a cold network run the old sequential
     // path took ~70-95s total; parallelizing collapses that to roughly
-    // the longest single subprocess (~30-40s).
+    // the longest single subprocess (~30-40s), and the bumped worker
+    // count halves that again.
     let mut handles = Vec::with_capacity(jobs.len());
     for (kind, conf) in jobs.into_iter() {
         let aip = aip.clone();
@@ -1684,7 +1693,11 @@ async fn refresh_data(
             if !conf.is_empty() {
                 cmd.args(["--conference", &conf]);
             }
-            let output = cmd.args(["--output-dir"]).arg(&output_dir).output();
+            let output = cmd
+                .args(["--workers", INGEST_WORKERS])
+                .args(["--output-dir"])
+                .arg(&output_dir)
+                .output();
             (kind, conf, output)
         }));
     }
