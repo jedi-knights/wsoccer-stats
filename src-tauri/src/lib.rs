@@ -393,13 +393,25 @@ fn strip_paren_ranking(s: &str) -> Option<&str> {
     }
     // Accept only content that looks like a rank marker so we don't chew
     // legitimate parenthetical opponents like ``(Ohio)`` off "Miami (Ohio)".
-    let looks_like_rank = inside.starts_with('#')
-        || inside.eq_ignore_ascii_case("RV")
-        || inside
-            .trim_start_matches(|c: char| c == 'T' || c == 't')
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '/')
-            && inside.chars().any(|c| c.is_ascii_digit());
+    // A rank marker is a '/'-separated list where each token is either
+    // ``RV`` (receiving votes), a plain or ``#``-prefixed rank number, or
+    // a ``T``-prefixed tie-marker (``T3``). Covers forms observed in the
+    // wild: ``(#19)``, ``(19)``, ``(RV)``, ``(RV/25)``, ``(#8/4)``,
+    // ``(T3/5)``.
+    let looks_like_rank = !inside.is_empty()
+        && inside.split('/').all(|tok| {
+            let t = tok.trim();
+            if t.is_empty() {
+                return false;
+            }
+            if t.eq_ignore_ascii_case("RV") {
+                return true;
+            }
+            let core = t
+                .trim_start_matches('#')
+                .trim_start_matches(|c: char| c == 'T' || c == 't');
+            !core.is_empty() && core.chars().all(|c| c.is_ascii_digit())
+        });
     if !looks_like_rank {
         return None;
     }
@@ -644,10 +656,20 @@ fn list_standings(
 
     let mut name_to_conf: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
+    // slug → conference used so PROGRAM_NAME_ALIASES entries (which
+    // only know the alias target slug) can look up the conference
+    // without duplicating that information in the alias table.
+    let mut slug_to_conf: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for g in &all_games {
         if !g.program_name.is_empty() && !g.conference.is_empty() {
             name_to_conf
                 .entry(normalize_team_name(&g.program_name))
+                .or_insert_with(|| g.conference.clone());
+        }
+        if !g.conference.is_empty() {
+            slug_to_conf
+                .entry(g.program_slug.clone())
                 .or_insert_with(|| g.conference.clone());
         }
     }
@@ -655,6 +677,25 @@ fn list_standings(
         name_to_conf
             .entry(normalize_team_name(&p.name))
             .or_insert_with(|| p.conference.clone());
+        if !p.conference.is_empty() {
+            slug_to_conf
+                .entry(p.slug.clone())
+                .or_insert_with(|| p.conference.clone());
+        }
+    }
+    // Fold the hardcoded aliases into the opponent-conference lookup
+    // too. Without this, opponent name variants that only appear via
+    // PROGRAM_NAME_ALIASES (Pepperdine's schedule writing "Seattle"
+    // instead of registry's "Seattle U", or anyone's schedule writing
+    // "LMU" instead of registry's "Loyola Marymount") don't resolve
+    // to a conference, so games against them aren't classified as
+    // conference games and the Conference standings mode drops them.
+    for (alias, slug) in PROGRAM_NAME_ALIASES.iter().copied() {
+        if let Some(conf) = slug_to_conf.get(slug) {
+            name_to_conf
+                .entry(normalize_team_name(alias))
+                .or_insert_with(|| conf.clone());
+        }
     }
     let is_same_conf = |g: &Game| -> bool {
         name_to_conf
