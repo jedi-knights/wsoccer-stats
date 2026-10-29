@@ -587,6 +587,33 @@ function RefreshButton({
   );
 }
 
+/// Secondary refresh for the rosters + stats ingest, surfaced only on
+/// views that render per-player data (Leaders tab, program roster
+/// page). Keeps the main Refresh button on the fast schedule-only
+/// path so iterating from Leaders doesn't pay the stats-ingest cost
+/// every click.
+function RefreshPlayerDataButton({
+  busy,
+  onClick,
+}: {
+  busy: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="refresh-btn"
+      disabled={busy}
+      onClick={onClick}
+      title="Refresh rosters and per-player stats"
+      aria-label="Refresh rosters and per-player stats"
+    >
+      <span className={busy ? "refresh-icon spinning" : "refresh-icon"}>
+        {busy ? "⏳" : "📊"}
+      </span>
+    </button>
+  );
+}
+
 function ThemeToggle({
   theme,
   onToggle,
@@ -682,77 +709,91 @@ function App() {
     total: number;
     label: string;
   } | null>(null);
-  const refresh = useCallback(async () => {
-    if (refreshing) return;
-    setRefreshing(true);
-    setProgress({ done: 0, total: 0, label: "Starting…" });
-    try {
-      const channel = new Channel<RefreshEvent>();
-      channel.onmessage = (msg) => {
-        if (msg.phase === "started") {
-          setProgress({ done: 0, total: msg.total, label: "Starting…" });
-        } else if (msg.phase === "step") {
-          // Pull the "N/M succeeded, …" fragment out of the aip CLI's
-          // "Done in 22.4s: 353/354 succeeded, 6780 games, …" so the
-          // progress label is informative — otherwise a 353/354 run
-          // reads as "(failed)" with no explanation.
-          const detail = msg.result.summary
-            .replace(/^Done in [^:]+:\s*/, "")
-            .trim();
-          setProgress({
-            done: msg.index,
-            total: msg.total,
-            label: `${msg.result.conference} · ${msg.result.kind}${
-              msg.result.ok ? "" : " (failed)"
-            }${detail ? ` · ${detail}` : ""}`,
-          });
-        } else if (msg.phase === "finished") {
-          setProgress({
-            done: msg.total,
-            total: msg.total,
-            label: `Refreshed ${msg.ok}/${msg.total} tasks`,
-          });
-        }
-      };
-      // Scope the subprocess set to what the current view actually
-      // displays. Schedule is always needed (it feeds Today / Standings
-      // / RPI / Conferences). Roster ingest and the heavy stats pass
-      // only matter on views that render per-player data — the Leaders
-      // tab and any program's roster page.
-      const effectiveTab: Tab | null =
-        view.kind === "standings" ? view.tab : view.fromTab;
-      const needsPlayerData =
-        view.kind === "roster" || effectiveTab === "leaders";
-      const kinds = needsPlayerData
-        ? ["ingest", "schedule", "stats"]
-        : ["schedule"];
-      const results = await invoke<
-        { kind: string; conference: string; ok: boolean; summary: string }[]
-      >("refresh_data", {
-        conference:
-          view.kind === "standings"
-            ? view.conference || null
-            : view.fromConference || null,
-        kinds,
-        onProgress: channel,
-      });
-      const ok = results.filter((r) => r.ok).length;
-      showToast(`Refreshed ${ok}/${results.length} tasks`);
-      setDataRevision((n) => n + 1);
-      if (ok > 0) markRefreshedNow();
-    } catch (e) {
-      showToast(`Refresh failed: ${e}`);
-    } finally {
-      setRefreshing(false);
-      window.setTimeout(() => setProgress(null), 1200);
-    }
-  }, [refreshing, showToast, view]);
+  const runRefresh = useCallback(
+    async (kinds: string[]) => {
+      if (refreshing) return;
+      setRefreshing(true);
+      setProgress({ done: 0, total: 0, label: "Starting…" });
+      try {
+        const channel = new Channel<RefreshEvent>();
+        channel.onmessage = (msg) => {
+          if (msg.phase === "started") {
+            setProgress({ done: 0, total: msg.total, label: "Starting…" });
+          } else if (msg.phase === "step") {
+            // Pull the "N/M succeeded, …" fragment out of the aip
+            // CLI's "Done in 22.4s: 353/354 succeeded, 6780 games, …"
+            // so the progress label is informative — otherwise a
+            // 353/354 run reads as "(failed)" with no explanation.
+            const detail = msg.result.summary
+              .replace(/^Done in [^:]+:\s*/, "")
+              .trim();
+            setProgress({
+              done: msg.index,
+              total: msg.total,
+              label: `${msg.result.conference} · ${msg.result.kind}${
+                msg.result.ok ? "" : " (failed)"
+              }${detail ? ` · ${detail}` : ""}`,
+            });
+          } else if (msg.phase === "finished") {
+            setProgress({
+              done: msg.total,
+              total: msg.total,
+              label: `Refreshed ${msg.ok}/${msg.total} tasks`,
+            });
+          }
+        };
+        const results = await invoke<
+          { kind: string; conference: string; ok: boolean; summary: string }[]
+        >("refresh_data", {
+          conference:
+            view.kind === "standings"
+              ? view.conference || null
+              : view.fromConference || null,
+          kinds,
+          onProgress: channel,
+        });
+        const ok = results.filter((r) => r.ok).length;
+        showToast(`Refreshed ${ok}/${results.length} tasks`);
+        setDataRevision((n) => n + 1);
+        if (ok > 0) markRefreshedNow();
+      } catch (e) {
+        showToast(`Refresh failed: ${e}`);
+      } finally {
+        setRefreshing(false);
+        window.setTimeout(() => setProgress(null), 1200);
+      }
+    },
+    [refreshing, showToast, view],
+  );
+  // Fast-path refresh: schedule-only. One subprocess, feeds the Today
+  // view's finals catch-up, Standings, RPI, and Conferences — the
+  // common case where the user just wants the latest results. On
+  // Leaders / roster views the per-player data is left stale; a
+  // dedicated "player data" button covers that.
+  const refresh = useCallback(() => runRefresh(["schedule"]), [runRefresh]);
+  // Opt-in refresh for per-player data (roster + stats). ~30s on an
+  // all-DI run, so hidden behind its own button on the only views
+  // that display player data (Leaders tab, program roster page).
+  const refreshPlayerData = useCallback(
+    () => runRefresh(["ingest", "stats"]),
+    [runRefresh],
+  );
+  const effectiveTab: Tab | null =
+    view.kind === "standings" ? view.tab : view.fromTab;
+  const showPlayerDataRefresh =
+    view.kind === "roster" || effectiveTab === "leaders";
   return (
     <>
       <div className="top-actions">
         <LastRefreshedBadge />
         <IngestIssuesPanel dataRevision={dataRevision} />
         <RefreshButton busy={refreshing} onClick={refresh} />
+        {showPlayerDataRefresh && (
+          <RefreshPlayerDataButton
+            busy={refreshing}
+            onClick={refreshPlayerData}
+          />
+        )}
         <ScreenshotButton onDone={showToast} />
         <ThemeToggle theme={theme} onToggle={toggleTheme} />
       </div>
