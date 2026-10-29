@@ -888,6 +888,35 @@ fn load_conference_labels() -> std::collections::HashMap<String, (String, String
     out
 }
 
+/// One program in the registry, with just the fields the command
+/// palette needs: slug (for navigation), display name (for the
+/// matched row), and conference slug (so the palette can show the
+/// conference label as a subtitle).
+#[derive(Debug, Clone, Serialize)]
+pub struct ProgramListing {
+    pub slug: String,
+    pub name: String,
+    pub conference: String,
+}
+
+/// Every DI program the registry carries. Served to the frontend
+/// once on mount so the command palette can filter locally without
+/// IPC round-trips on every keystroke. Sorted alphabetically by
+/// display name.
+#[tauri::command]
+fn list_programs() -> Result<Vec<ProgramListing>, String> {
+    let mut rows: Vec<ProgramListing> = load_program_registry()
+        .into_iter()
+        .map(|p| ProgramListing {
+            slug: p.slug,
+            name: p.name,
+            conference: p.conference,
+        })
+        .collect();
+    rows.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(rows)
+}
+
 /// Every conference the app knows about, sorted alphabetically by
 /// display label so the dropdown reads naturally to a user scanning it.
 ///
@@ -2400,7 +2429,8 @@ pub fn run() {
             refresh_data,
             refresh_schedules_for_slugs,
             fetch_live_scoreboard,
-            list_ingest_issues
+            list_ingest_issues,
+            list_programs
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
