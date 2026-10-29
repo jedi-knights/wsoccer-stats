@@ -447,6 +447,153 @@ function formatRelativeAge(fromMs: number, nowMs: number): string {
   return `${d}d ago`;
 }
 
+type ProgramListing = {
+  slug: string;
+  name: string;
+  conference: string;
+};
+
+/// ⌘K / Ctrl+K command palette that filters the full DI program
+/// registry by substring and opens the chosen program's roster. All
+/// matching happens locally against a prefetched list to avoid IPC
+/// per keystroke; the list is small (~354 programs) so a linear
+/// filter is fine.
+function ProgramSearchPalette({
+  open,
+  programs,
+  onClose,
+  onPick,
+}: {
+  open: boolean;
+  programs: ProgramListing[];
+  onClose: () => void;
+  onPick: (p: ProgramListing) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [highlighted, setHighlighted] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  // Reset query and selection whenever the palette opens so the user
+  // starts from a clean state each time rather than seeing a stale
+  // search from the previous session.
+  useEffect(() => {
+    if (open) {
+      setQuery("");
+      setHighlighted(0);
+      // Defer focus to the next tick so the <dialog>-like overlay has
+      // actually mounted when the browser tries to focus the input.
+      window.setTimeout(() => inputRef.current?.focus(), 0);
+    }
+  }, [open]);
+
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return programs.slice(0, 50);
+    // Rank by: exact-prefix match on name > any-position substring on
+    // name > match on slug. Within each tier, keep the registry's
+    // alphabetical order.
+    const prefix: ProgramListing[] = [];
+    const contains: ProgramListing[] = [];
+    const slug: ProgramListing[] = [];
+    for (const p of programs) {
+      const n = p.name.toLowerCase();
+      if (n.startsWith(q)) prefix.push(p);
+      else if (n.includes(q)) contains.push(p);
+      else if (p.slug.toLowerCase().includes(q)) slug.push(p);
+    }
+    return [...prefix, ...contains, ...slug].slice(0, 50);
+  }, [programs, query]);
+
+  // Keep the highlighted result in bounds whenever the result set
+  // changes under us (e.g. the user typed more characters and the
+  // list shrunk past the previous highlight).
+  useEffect(() => {
+    if (highlighted >= results.length) setHighlighted(0);
+  }, [results, highlighted]);
+
+  // Scroll the highlighted row into view when arrow-keying beyond
+  // the visible slice.
+  useEffect(() => {
+    const el = listRef.current?.children.item(highlighted) as
+      | HTMLElement
+      | null;
+    el?.scrollIntoView({ block: "nearest" });
+  }, [highlighted]);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onClose();
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlighted((h) => Math.min(results.length - 1, h + 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlighted((h) => Math.max(0, h - 1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const pick = results[highlighted];
+      if (pick) onPick(pick);
+    }
+  };
+
+  if (!open) return null;
+  return (
+    <div
+      className="palette-overlay"
+      onKeyDown={onKeyDown}
+      onClick={(e) => {
+        // Click outside the palette body closes it; clicks inside
+        // the body don't bubble up.
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="palette-body" role="dialog" aria-label="Find a program">
+        <input
+          ref={inputRef}
+          className="palette-input"
+          placeholder="Find a program…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        {results.length === 0 ? (
+          <div className="palette-empty">No match for “{query.trim()}”.</div>
+        ) : (
+          <ul className="palette-list" ref={listRef} role="listbox">
+            {results.map((p, idx) => (
+              <li
+                key={p.slug}
+                role="option"
+                aria-selected={idx === highlighted}
+                className={
+                  idx === highlighted
+                    ? "palette-item palette-item-active"
+                    : "palette-item"
+                }
+                onMouseEnter={() => setHighlighted(idx)}
+                onClick={() => onPick(p)}
+              >
+                <span className="palette-item-name">{p.name}</span>
+                {p.conference && (
+                  <span className="palette-item-conference">
+                    {labelFor(p.conference)}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="palette-footer">
+          <kbd>↑↓</kbd> navigate <kbd>↵</kbd> open <kbd>esc</kbd> close
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LastRefreshedBadge() {
   const [lastAt, setLastAt] = useState<number | null>(() =>
     loadLastRefreshedAt(),
@@ -688,6 +835,7 @@ function App() {
     conference: initialConferenceFilter(),
     tab: "conferences",
   }));
+
   const onConferenceChange = useCallback((c: string) => {
     setView((v) =>
       v.kind === "standings" && v.conference !== c
@@ -702,6 +850,29 @@ function App() {
     return () => {
       DATA_REVISION_EMITTER = null;
     };
+  }, []);
+
+  // Program list for the command palette. Fetched once on mount
+  // (~354 rows, cheap); the palette filters locally so there's no
+  // per-keystroke IPC. Re-fetched on each refresh in case the
+  // registry picked up a new program.
+  const [programs, setPrograms] = useState<ProgramListing[]>([]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    invoke<ProgramListing[]>("list_programs")
+      .then(setPrograms)
+      .catch(() => setPrograms([]));
+  }, [dataRevision]);
+  // ⌘/Ctrl + K — open the program palette from anywhere in the app.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
   const [refreshing, setRefreshing] = useState(false);
   const [progress, setProgress] = useState<{
@@ -825,6 +996,30 @@ function App() {
           {toast}
         </div>
       )}
+      <ProgramSearchPalette
+        open={paletteOpen}
+        programs={programs}
+        onClose={() => setPaletteOpen(false)}
+        onPick={(p) => {
+          setPaletteOpen(false);
+          // Palette navigation is a jump from anywhere; stash the
+          // user's current conference/tab so Back on the roster view
+          // returns to a reasonable place.
+          const fromConference =
+            view.kind === "standings"
+              ? view.conference
+              : view.fromConference;
+          const fromTab: Tab =
+            view.kind === "standings" ? view.tab : view.fromTab;
+          setView({
+            kind: "roster",
+            slug: p.slug,
+            name: p.name,
+            fromConference,
+            fromTab,
+          });
+        }}
+      />
       {view.kind === "standings" ? (
         <BrowsePage
           key={`browse-${dataRevision}`}
