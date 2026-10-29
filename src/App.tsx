@@ -1115,6 +1115,47 @@ function TodayPage({
     return () => window.clearInterval(id);
   }, [today, matches === null, liveCount > 0]);
 
+  // Periodically re-ingest the CMS schedule for live programs so the
+  // Standings / Schedule / Roster views pick up final scores (and any
+  // interim CMS updates) without the user clicking the Refresh
+  // button. ESPN gives us the Today-view score immediately via the
+  // scoreboard poll above; this slower cadence (120s) is what pushes
+  // those same scores into the ingested NDJSON that every other view
+  // reads from. Scoped to live-match programs only — a sitewide
+  // re-ingest here would be too expensive to run on a timer.
+  const liveSlugsRef = useRef<string[]>([]);
+  liveSlugsRef.current = useMemo(() => {
+    if (!matches) return [] as string[];
+    const set = new Set<string>();
+    for (const m of matches) {
+      if (isMatchLive(m, now)) {
+        if (m.program_slug) set.add(m.program_slug);
+        if (m.opponent_slug) set.add(m.opponent_slug);
+      }
+    }
+    return [...set];
+  }, [matches, now]);
+  useEffect(() => {
+    if (liveCount === 0) return;
+    const tick = async () => {
+      if (reingestInFlight.current) return;
+      const slugs = liveSlugsRef.current;
+      if (slugs.length === 0) return;
+      reingestInFlight.current = true;
+      try {
+        await invoke("refresh_schedules_for_slugs", { slugs });
+        emitDataRevisionBump();
+      } catch {
+        // Swallow — the per-tick post-event re-ingest will cover
+        // the final-score case on its own.
+      } finally {
+        reingestInFlight.current = false;
+      }
+    };
+    const id = window.setInterval(tick, 120_000);
+    return () => window.clearInterval(id);
+  }, [liveCount > 0]);
+
   // Normalize a team name to a stable lookup key. Mirrors the
   // backend's `normalize_team_name` closely enough that our row's
   // "Allen University (S.C.)" matches ESPN's "Allen": strip trailing
