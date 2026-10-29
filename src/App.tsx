@@ -505,6 +505,13 @@ function App() {
     conference: "",
     tab: "conferences",
   });
+  const onConferenceChange = useCallback((c: string) => {
+    setView((v) =>
+      v.kind === "standings" && v.conference !== c
+        ? { ...v, conference: c }
+        : v,
+    );
+  }, []);
   const [dataRevision, setDataRevision] = useState(0);
   useEffect(() => {
     DATA_REVISION_EMITTER = () => setDataRevision((n) => n + 1);
@@ -609,6 +616,7 @@ function App() {
           key={`browse-${dataRevision}`}
           initialConference={view.conference}
           initialTab={view.tab}
+          onConferenceChange={onConferenceChange}
           onOpenRoster={(slug, name, fromConference, fromTab) =>
             setView({ kind: "roster", slug, name, fromConference, fromTab })
           }
@@ -653,10 +661,12 @@ function App() {
 function BrowsePage({
   initialConference,
   initialTab,
+  onConferenceChange,
   onOpenRoster,
 }: {
   initialConference: string;
   initialTab: Tab;
+  onConferenceChange: (conference: string) => void;
   onOpenRoster: (
     slug: string,
     name: string,
@@ -669,6 +679,15 @@ function BrowsePage({
   const [selected, setSelected] = useState<string>(initialConference);
   const [tab, setTab] = useState<Tab>(initialTab);
   const [error, setError] = useState<string | null>(null);
+
+  // Keep the parent's view.conference in sync with the dropdown so a
+  // scoped refresh (Refresh button in App) ingests only the viewed
+  // conference's ~10 programs instead of all 354. Without this, the
+  // parent carries the conference the user originally landed on and
+  // every subsequent dropdown change is invisible to the refresh.
+  useEffect(() => {
+    onConferenceChange(selected);
+  }, [selected, onConferenceChange]);
 
   useEffect(() => {
     invoke<ConferenceEntry[]>("list_conferences")
