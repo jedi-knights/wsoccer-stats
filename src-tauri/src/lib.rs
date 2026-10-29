@@ -80,6 +80,49 @@ pub fn normalize_team_name_debug(name: &str) -> String {
 /// fix opponent resolution in one place without round-tripping
 /// a change through `athletics-ingest-platform`'s YAML. Promote
 /// to the registry if the alias list grows beyond ~50 entries.
+/// Collapse known duplicate registry slugs onto a single canonical
+/// slug. The aip registry has two separate entries for South Carolina
+/// Upstate (``south_carolina_upstate`` and ``usc_upstate``) that point
+/// at the same program, with identical schedule files on disk; without
+/// this collapse the Today view shows every USC-Upstate game twice,
+/// one row from each slug perspective, and ESPN joins miss because
+/// the frontend's slug-pair key disagrees on which half of the
+/// duplicate the row uses.
+///
+/// The right-hand slug is treated as the canonical one.
+pub const CANONICAL_SLUG_ALIASES: &[(&str, &str)] = &[
+    ("south_carolina_upstate", "usc_upstate"),
+    // Cal State Bakersfield is listed in the registry twice: once as
+    // ``cal_state_bakersfield`` (ESPN's preferred form) and once as
+    // ``csu_bakersfield`` (the athletics-site shorthand). Collapse to
+    // the latter since the schedule files on disk use that slug as
+    // the primary program slug.
+    ("cal_state_bakersfield", "csu_bakersfield"),
+];
+
+/// Return the canonical form of ``slug`` — the slug itself when no
+/// alias applies, or the alias target when one does.
+pub(crate) fn canonical_slug(slug: &str) -> &str {
+    for (from, to) in CANONICAL_SLUG_ALIASES.iter().copied() {
+        if slug == from {
+            return to;
+        }
+    }
+    slug
+}
+
+/// Resolve the canonical registry display name for a slug, falling
+/// back to the raw slug when the registry doesn't carry it. Only used
+/// by views that intentionally paper over the duplicate above — the
+/// rest of the app continues to use whatever name the schedule file
+/// supplied, which is what users typed into search filters.
+fn canonical_program_name<'a>(slug: &str, registry: &'a [RegistryProgram]) -> Option<&'a str> {
+    registry
+        .iter()
+        .find(|p| p.slug == slug)
+        .map(|p| p.name.as_str())
+}
+
 pub const PROGRAM_NAME_ALIASES: &[(&str, &str)] = &[
     // SEC schools whose shortened registry names miss on opponents'
     // schedules that spell the full name.
@@ -1104,19 +1147,55 @@ fn list_todays_matches(today: String) -> Result<Vec<UpcomingMatch>, String> {
             continue;
         }
         let opp_key = normalize_team_name(&g.opponent);
-        let opp_slug = name_to_slug.get(&opp_key).cloned();
+        let opp_slug_raw = name_to_slug.get(&opp_key).cloned();
         let opp_conf = name_to_conf.get(&opp_key).cloned().unwrap_or_default();
         let program_tz = slug_to_tz
             .get(&g.program_slug)
             .copied()
             .unwrap_or("")
             .to_string();
+        // Collapse known duplicate registry slugs so a program the
+        // registry lists twice (south_carolina_upstate / usc_upstate)
+        // doesn't surface two rows for every game — the dedup pass on
+        // the frontend keys on program_slug, so canonicalizing both
+        // sides here is what actually lets dedup collapse the pair.
+        let program_slug = canonical_slug(&g.program_slug).to_string();
+        let opponent_slug = opp_slug_raw
+            .as_ref()
+            .map(|s| canonical_slug(s).to_string())
+            // A team can't play itself. If normalization collided two
+            // distinct programs onto one slug (e.g. "Saint Francis (PA)"
+            // and non-DI "Saint Francis University" both normalize to
+            // "saint francis" → `saint_francis_pa`), the opponent_slug
+            // match is spurious — drop it so the row falls through to
+            // name-pair matching on the frontend and isn't rendered as
+            // a self-match.
+            .filter(|s| s != &program_slug);
+        // When a slug alias actually fires, rewrite the display name
+        // to the canonical registry entry so the row doesn't flip
+        // between the two forms depending on which perspective
+        // survived dedup.
+        let program_name = if program_slug != g.program_slug {
+            canonical_program_name(&program_slug, &registry)
+                .unwrap_or(&g.program_name)
+                .to_string()
+        } else {
+            g.program_name.clone()
+        };
+        let opponent_name = match (&opponent_slug, &opp_slug_raw) {
+            (Some(canonical), Some(raw)) if canonical != raw => {
+                canonical_program_name(canonical, &registry)
+                    .unwrap_or(&g.opponent)
+                    .to_string()
+            }
+            _ => g.opponent.clone(),
+        };
         rows.push(UpcomingMatch {
-            program_slug: g.program_slug.clone(),
-            program_name: g.program_name.clone(),
+            program_slug,
+            program_name,
             conference: g.conference.clone(),
-            opponent_slug: opp_slug,
-            opponent_name: g.opponent.clone(),
+            opponent_slug,
+            opponent_name,
             opponent_conference: opp_conf,
             date: g.date.clone(),
             home_away: g.home_away.clone(),
@@ -1621,6 +1700,264 @@ async fn refresh_data(
     Ok(results)
 }
 
+/// Re-ingest the schedule NDJSON for a specific set of programs,
+/// running one aip CLI subprocess per slug in parallel. Used by the
+/// Today view's live-score poll: the frontend identifies which
+/// programs currently have a match inside the live window and asks the
+/// backend to refresh those schedules so the score column can update
+/// from the CMS's in-progress numbers.
+///
+/// `slugs` is capped at 50 to bound the subprocess fan-out — a typical
+/// window of simultaneous DI matches sits well under that cap, and
+/// anything above it almost certainly indicates a bug on the caller
+/// side rather than a real workload.
+#[tauri::command]
+async fn refresh_schedules_for_slugs(
+    slugs: Vec<String>,
+) -> Result<Vec<RefreshResult>, String> {
+    const MAX_SLUGS: usize = 50;
+    if slugs.is_empty() {
+        return Ok(Vec::new());
+    }
+    if slugs.len() > MAX_SLUGS {
+        return Err(format!(
+            "too many slugs: got {}, cap is {MAX_SLUGS}",
+            slugs.len()
+        ));
+    }
+    for slug in &slugs {
+        validate_slug(slug)?;
+    }
+
+    let aip = aip_dir();
+    if !aip.exists() {
+        return Err(format!(
+            "aip repo not found at {} — set WSOCCER_STATS_AIP_DIR",
+            aip.display()
+        ));
+    }
+    let output_dir = aip.join("output");
+
+    let mut handles = Vec::with_capacity(slugs.len());
+    for slug in slugs {
+        let aip = aip.clone();
+        let output_dir = output_dir.clone();
+        handles.push(tauri::async_runtime::spawn_blocking(move || {
+            let output = std::process::Command::new("uv")
+                .current_dir(&aip)
+                .args(["run", "python", "-m", "athletics_ingest", "schedule"])
+                .args(["--program", &slug])
+                .args(["--output-dir"])
+                .arg(&output_dir)
+                .output();
+            (slug, output)
+        }));
+    }
+
+    let mut results = Vec::new();
+    for h in handles {
+        let (slug, output) = h.await.map_err(|e| e.to_string())?;
+        let output = output.map_err(|e| format!("spawn failed for {slug}: {e}"))?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let summary = stderr
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .rev()
+            .find(|l| l.trim_start().starts_with("Done in "))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                stderr
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .next_back()
+                    .unwrap_or("")
+                    .to_string()
+            });
+        let parsed_successes = parse_done_in_successes(&summary);
+        let ok = output.status.success()
+            || parsed_successes.map(|n| n > 0).unwrap_or(false);
+        results.push(RefreshResult {
+            kind: "schedule".to_string(),
+            conference: slug,
+            ok,
+            summary,
+        });
+    }
+    Ok(results)
+}
+
+/// One in-progress or completed match from ESPN's public scoreboard
+/// endpoint for NCAA Division I women's soccer. Used to surface live
+/// scores on the Today view: CMS schedule pages don't publish
+/// in-progress scores in a format our parsers understand, but ESPN's
+/// scoreboard has state + displayClock + score for every event. The
+/// frontend joins these onto `list_todays_matches` rows by normalized
+/// team name.
+#[derive(Debug, Clone, Serialize)]
+pub struct LiveScore {
+    /// Scoreboard event id — stable across polls, useful as a React
+    /// key / cache key client-side.
+    pub id: String,
+    /// Lifecycle state: ``pre`` (not started), ``in`` (live), ``post``
+    /// (final). Returned verbatim from ESPN so callers can filter.
+    pub state: String,
+    /// Display clock like ``"45'"`` for a live game or ``"90'"`` for a
+    /// finished one. Empty when ESPN didn't supply it.
+    pub display_clock: String,
+    /// Longer human-readable status (``FT``, ``HT``, ``45'+2'``).
+    pub detail: String,
+    pub home_name: String,
+    pub home_score: u32,
+    pub away_name: String,
+    pub away_score: u32,
+    /// Registry slugs resolved from ESPN's display names via the same
+    /// name → slug lookup list_todays_matches uses. Empty when the
+    /// name couldn't be matched. Enables the frontend to join an
+    /// ESPN event to an UpcomingMatch row by slug pair, which is far
+    /// more reliable than matching display-name variants ("USC" vs
+    /// "Southern California", "NC State" vs "N.C. State", …).
+    pub home_slug: String,
+    pub away_slug: String,
+}
+
+/// Fetch today's NCAA Division I women's soccer scoreboard from ESPN
+/// so the Today view can show live scores. ``date`` is ``YYYYMMDD``
+/// in the caller's local timezone — ESPN interprets scoreboard
+/// `dates` queries in US Eastern time, but passing the local-today
+/// still returns the overlapping set of events for the vast majority
+/// of DI matches.
+#[tauri::command]
+async fn fetch_live_scoreboard(date: String) -> Result<Vec<LiveScore>, String> {
+    if date.len() != 8 || !date.chars().all(|c| c.is_ascii_digit()) {
+        return Err(format!("invalid date: expected YYYYMMDD, got {date:?}"));
+    }
+    let url = format!(
+        "https://site.api.espn.com/apis/site/v2/sports/soccer/usa.ncaa.w.1/scoreboard?dates={date}"
+    );
+    let body: serde_json::Value = tauri::async_runtime::spawn_blocking(move || {
+        ureq::get(&url)
+            .timeout(std::time::Duration::from_secs(8))
+            .call()
+            .map_err(|e| format!("espn fetch: {e}"))?
+            .into_json::<serde_json::Value>()
+            .map_err(|e| format!("espn parse: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Build the same name → slug lookup list_todays_matches uses so
+    // ESPN's display names resolve to the registry slug the frontend
+    // already associates with each UpcomingMatch row. Seed order:
+    // registry first, then every seen schedule (picks up variants
+    // that only live in schedule data), then PROGRAM_NAME_ALIASES.
+    let registry = load_program_registry();
+    let all_games = load_games().unwrap_or_default();
+    let mut name_to_slug: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for p in &registry {
+        name_to_slug
+            .entry(normalize_team_name(&p.name))
+            .or_insert_with(|| p.slug.clone());
+    }
+    for g in &all_games {
+        if !g.program_name.is_empty() {
+            name_to_slug
+                .entry(normalize_team_name(&g.program_name))
+                .or_insert_with(|| g.program_slug.clone());
+        }
+    }
+    for (alias, slug) in PROGRAM_NAME_ALIASES.iter().copied() {
+        name_to_slug
+            .entry(normalize_team_name(alias))
+            .or_insert_with(|| slug.to_string());
+    }
+
+    let events = body
+        .get("events")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::with_capacity(events.len());
+    for e in events {
+        let id = e
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let status = e.get("status").cloned().unwrap_or(serde_json::Value::Null);
+        let state = status
+            .pointer("/type/state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let detail = status
+            .pointer("/type/detail")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let display_clock = status
+            .get("displayClock")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let competitors = e
+            .pointer("/competitions/0/competitors")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let (mut home_name, mut home_score, mut away_name, mut away_score) =
+            (String::new(), 0u32, String::new(), 0u32);
+        for c in &competitors {
+            let name = c
+                .pointer("/team/displayName")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            // ESPN sends scores as strings ("0", "3"). Parse defensively.
+            let score = c
+                .get("score")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<u32>().ok())
+                .or_else(|| c.get("score").and_then(|v| v.as_u64()).map(|n| n as u32))
+                .unwrap_or(0);
+            match c.get("homeAway").and_then(|v| v.as_str()) {
+                Some("home") => {
+                    home_name = name;
+                    home_score = score;
+                }
+                Some("away") => {
+                    away_name = name;
+                    away_score = score;
+                }
+                _ => {}
+            }
+        }
+        if !home_name.is_empty() || !away_name.is_empty() {
+            let home_slug = name_to_slug
+                .get(&normalize_team_name(&home_name))
+                .map(|s| canonical_slug(s).to_string())
+                .unwrap_or_default();
+            let away_slug = name_to_slug
+                .get(&normalize_team_name(&away_name))
+                .map(|s| canonical_slug(s).to_string())
+                .unwrap_or_default();
+            out.push(LiveScore {
+                id,
+                state,
+                display_clock,
+                detail,
+                home_name,
+                home_score,
+                away_name,
+                away_score,
+                home_slug,
+                away_slug,
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// Return the ordered list of games for one program's season schedule.
 ///
 /// Sorted by ISO date ascending — the producer typically writes them that
@@ -1899,7 +2236,9 @@ pub fn run() {
             list_roster,
             list_schedule,
             list_leaders,
-            refresh_data
+            refresh_data,
+            refresh_schedules_for_slugs,
+            fetch_live_scoreboard
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
