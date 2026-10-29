@@ -721,7 +721,17 @@ a.external-link:hover {
   right: 12px;
   z-index: 10;
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+.last-refreshed {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  padding: 0 6px;
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
 }
 
 .theme-toggle,
