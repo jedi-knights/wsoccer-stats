@@ -1660,31 +1660,40 @@ async fn refresh_data(
     let total = jobs.len();
     let _ = on_progress.send(RefreshEvent::Started { total });
 
-    let mut results = Vec::new();
-    for (index, (kind, conf)) in jobs.into_iter().enumerate() {
-        let output = tauri::async_runtime::spawn_blocking({
-            let aip = aip.clone();
-            let output_dir = output_dir.clone();
-            let conf = conf.clone();
-            move || {
-                let mut cmd = std::process::Command::new("uv");
-                cmd.current_dir(&aip).args([
-                    "run",
-                    "python",
-                    "-m",
-                    "athletics_ingest",
-                    kind,
-                ]);
-                if !conf.is_empty() {
-                    cmd.args(["--conference", &conf]);
-                }
-                cmd.args(["--output-dir"]).arg(&output_dir).output()
+    // Run the three ingest subprocesses in parallel. They write to
+    // disjoint output subdirs (``rosters/`` / ``schedules/`` / ``stats/``)
+    // and don't consume each other's output; the one shared file both
+    // ingest and schedule produce (``programs.ndjson``) is written
+    // identically from the same registry source, so a last-writer-wins
+    // race is content-safe. On a cold network run the old sequential
+    // path took ~70-95s total; parallelizing collapses that to roughly
+    // the longest single subprocess (~30-40s).
+    let mut handles = Vec::with_capacity(jobs.len());
+    for (kind, conf) in jobs.into_iter() {
+        let aip = aip.clone();
+        let output_dir = output_dir.clone();
+        handles.push(tauri::async_runtime::spawn_blocking(move || {
+            let mut cmd = std::process::Command::new("uv");
+            cmd.current_dir(&aip).args([
+                "run",
+                "python",
+                "-m",
+                "athletics_ingest",
+                kind,
+            ]);
+            if !conf.is_empty() {
+                cmd.args(["--conference", &conf]);
             }
-        })
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| format!("spawn failed for {kind}/{conf}: {e}"))?;
+            let output = cmd.args(["--output-dir"]).arg(&output_dir).output();
+            (kind, conf, output)
+        }));
+    }
 
+    let mut results = Vec::with_capacity(total);
+    for (index, h) in handles.into_iter().enumerate() {
+        let (kind, conf, output) = h.await.map_err(|e| e.to_string())?;
+        let output =
+            output.map_err(|e| format!("spawn failed for {kind}/{conf}: {e}"))?;
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Prefer the aip CLI's "Done in …: N/M succeeded, …" line as the
         // summary — it names the actual counts. The absolute last line
