@@ -361,6 +361,38 @@ function persistConferenceFilter(conf: string): void {
   }
 }
 
+// Wall-clock epoch (ms) of the most recent successful ingest refresh.
+// Rendered as "Updated Nm ago" in the header so the user has a quick
+// signal for how stale the on-screen data is. Persisted so an app
+// restart doesn't lose the last-known freshness (useful because the
+// ingest NDJSON itself survives restarts).
+const LAST_REFRESHED_AT_STORAGE_KEY = "lastRefreshedAt";
+
+function loadLastRefreshedAt(): number | null {
+  try {
+    const raw = localStorage.getItem(LAST_REFRESHED_AT_STORAGE_KEY);
+    if (!raw) return null;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+// Module-level pub/sub so the Today view's auto-reingest paths can
+// stamp the freshness time alongside App's manual-refresh handler
+// without threading a callback through props.
+const lastRefreshedListeners = new Set<(ts: number) => void>();
+function markRefreshedNow(): void {
+  const now = Date.now();
+  try {
+    localStorage.setItem(LAST_REFRESHED_AT_STORAGE_KEY, String(now));
+  } catch {
+    // ignore inaccessible localStorage
+  }
+  lastRefreshedListeners.forEach((cb) => cb(now));
+}
+
 async function captureScreenshotToClipboard(
   target?: HTMLElement | null,
 ): Promise<"ok" | "no-clipboard" | "denied" | "error"> {
@@ -401,6 +433,49 @@ async function captureScreenshotToClipboard(
     if (String(e).includes("permission")) return "denied";
     return "error";
   }
+}
+
+function formatRelativeAge(fromMs: number, nowMs: number): string {
+  const deltaS = Math.max(0, Math.floor((nowMs - fromMs) / 1000));
+  if (deltaS < 30) return "just now";
+  if (deltaS < 60) return `${deltaS}s ago`;
+  const m = Math.floor(deltaS / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
+}
+
+function LastRefreshedBadge() {
+  const [lastAt, setLastAt] = useState<number | null>(() =>
+    loadLastRefreshedAt(),
+  );
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    lastRefreshedListeners.add(setLastAt);
+    return () => {
+      lastRefreshedListeners.delete(setLastAt);
+    };
+  }, []);
+  useEffect(() => {
+    // Re-render every 15 s so the relative-age string stays current
+    // without having to recompute on every parent render. The jump
+    // from "just now" → "30s ago" → "1m ago" is captured within one
+    // tick of granularity, which matches the display's resolution.
+    const id = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(id);
+  }, []);
+  if (lastAt == null) return null;
+  const label = formatRelativeAge(lastAt, now);
+  return (
+    <span
+      className="last-refreshed"
+      title={`Last ingest refresh completed at ${new Date(lastAt).toLocaleString()}`}
+    >
+      Updated {label}
+    </span>
+  );
 }
 
 function ScreenshotButton({ onDone }: { onDone: (status: string) => void }) {
@@ -605,6 +680,7 @@ function App() {
       const ok = results.filter((r) => r.ok).length;
       showToast(`Refreshed ${ok}/${results.length} tasks`);
       setDataRevision((n) => n + 1);
+      if (ok > 0) markRefreshedNow();
     } catch (e) {
       showToast(`Refresh failed: ${e}`);
     } finally {
@@ -615,6 +691,7 @@ function App() {
   return (
     <>
       <div className="top-actions">
+        <LastRefreshedBadge />
         <RefreshButton busy={refreshing} onClick={refresh} />
         <ScreenshotButton onDone={showToast} />
         <ThemeToggle theme={theme} onToggle={toggleTheme} />
@@ -1085,6 +1162,7 @@ function TodayPage({
                 // Bump the global data revision so Standings /
                 // Schedule / Roster pages re-fetch their NDJSON.
                 emitDataRevisionBump();
+                markRefreshedNow();
               })
               .catch(() => {
                 // Allow retrying on the next poll tick if the ingest
