@@ -112,6 +112,19 @@ type RefreshEvent =
 
 type Tab = "conferences" | "standings" | "leaders" | "today" | "rpi";
 
+type LiveScore = {
+  id: string;
+  state: string; // "pre" | "in" | "post"
+  display_clock: string;
+  detail: string;
+  home_name: string;
+  home_score: number;
+  away_name: string;
+  away_score: number;
+  home_slug: string;
+  away_slug: string;
+};
+
 type UpcomingMatch = {
   program_slug: string;
   program_name: string;
@@ -944,6 +957,93 @@ function TodayPage({
 }) {
   const { matches, today, now } = useUpcomingMatches(30_000);
   const [query, setQuery] = useState("");
+
+  // Pull live scores off ESPN's public scoreboard. CMS schedule pages
+  // don't publish in-progress scores in a format our aip parsers
+  // recognize, so the only reliable source for the current score of a
+  // live match is ESPN's endpoint. Fetch once on mount, then every 45s
+  // while a match in the live window is present so goals surface
+  // without the user needing to reload.
+  const [scoreboard, setScoreboard] = useState<LiveScore[] | null>(null);
+  const liveCount = useMemo(() => {
+    if (!matches) return 0;
+    return matches.filter((m) => isMatchLive(m, now)).length;
+  }, [matches, now]);
+  const scoreboardInFlight = useRef(false);
+  useEffect(() => {
+    if (matches === null) return;
+    const yyyymmdd = (iso: string) => iso.replace(/-/g, "");
+    const tick = async () => {
+      if (scoreboardInFlight.current) return;
+      scoreboardInFlight.current = true;
+      try {
+        const rows = await invoke<LiveScore[]>("fetch_live_scoreboard", {
+          date: yyyymmdd(today),
+        });
+        setScoreboard(rows);
+      } catch {
+        // Swallow — scoreboard failures (network blip, ESPN hiccup)
+        // shouldn't surface a toast. Next tick retries.
+      } finally {
+        scoreboardInFlight.current = false;
+      }
+    };
+    tick();
+    // Only run a repeating poll when there's actually a live match to
+    // watch; otherwise one fetch per visit is enough to populate final
+    // scores that the CMS lag hasn't surfaced yet.
+    if (liveCount === 0) return;
+    const id = window.setInterval(tick, 45_000);
+    return () => window.clearInterval(id);
+  }, [today, matches === null, liveCount > 0]);
+
+  // Normalize a team name to a stable lookup key. Mirrors the
+  // backend's `normalize_team_name` closely enough that our row's
+  // "Allen University (S.C.)" matches ESPN's "Allen": strip trailing
+  // parenthetical disambiguators, strip trailing " university", drop
+  // non-alphanumeric. The backend already resolves slug pairs when it
+  // can; this fallback only runs when slug resolution misses.
+  const nameKey = (s: string): string => {
+    let v = (s || "").trim();
+    // Trailing paren qualifier: "Allen University (S.C.)" → "Allen University"
+    v = v.replace(/\s*\([^)]*\)\s*$/, "");
+    v = v.toLowerCase();
+    // Trailing "university" variant: "allen university" → "allen"
+    v = v.replace(/\s+(?:university|univ\.?)\s*$/, "");
+    return v.replace(/[^a-z0-9]+/g, "");
+  };
+  // Build two parallel lookups from unordered pair → LiveScore. Slug
+  // pair is the authoritative one (set when ESPN's names resolve via
+  // the registry); name pair is the fallback for events where ESPN
+  // uses a display name we haven't aliased yet. Prefer the slug pair
+  // on lookup — slugs don't drift the way "USC" vs "Southern
+  // California" does.
+  const { scoreBySlugPair, scoreByNamePair } = useMemo(() => {
+    const slugs = new Map<string, LiveScore>();
+    const names = new Map<string, LiveScore>();
+    for (const row of scoreboard ?? []) {
+      if (row.home_slug && row.away_slug) {
+        slugs.set([row.home_slug, row.away_slug].sort().join("|"), row);
+      }
+      names.set(
+        [nameKey(row.home_name), nameKey(row.away_name)].sort().join("|"),
+        row,
+      );
+    }
+    return { scoreBySlugPair: slugs, scoreByNamePair: names };
+  }, [scoreboard]);
+  const liveScoreFor = (m: UpcomingMatch): LiveScore | undefined => {
+    if (m.opponent_slug) {
+      const hit = scoreBySlugPair.get(
+        [m.program_slug, m.opponent_slug].sort().join("|"),
+      );
+      if (hit) return hit;
+    }
+    return scoreByNamePair.get(
+      [nameKey(m.program_name), nameKey(m.opponent_name)].sort().join("|"),
+    );
+  };
+
   const tomorrow = useMemo(() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
@@ -968,13 +1068,13 @@ function TodayPage({
         nameToSlug.set(normalizeName(m.program_name), m.program_slug);
       }
     }
-    // Score each row by how much useful detail it carries: broadcast
-    // link, broadcast channel, and kickoff time are each worth a point.
-    // The row with the higher score wins the matchup; ties go to the
-    // home team. This way a null-everything home row doesn't shadow a
-    // populated away row (common on SWAC/MEAC games where only one
-    // program's SPA emits broadcast details).
+    // Score each row by how much useful detail it carries. A published
+    // result dominates everything else (10×) so a final-score row never
+    // gets shadowed by a result-less row that happens to have a watch
+    // link. Broadcast + kickoff carry 1 each after that; home-vs-away
+    // only breaks ties.
     const detailScore = (m: UpcomingMatch): number =>
+      (m.result != null ? 10 : 0) +
       (m.broadcast_url ? 1 : 0) +
       (m.broadcast_channel ? 1 : 0) +
       (m.kickoff_time ? 1 : 0);
@@ -1054,6 +1154,7 @@ function TodayPage({
                 <th>Kickoff</th>
                 <th>Matchup</th>
                 <th>Conf</th>
+                <th>Score</th>
                 <th>Broadcast</th>
                 <th>Status</th>
               </tr>
@@ -1077,7 +1178,6 @@ function TodayPage({
                   );
                 })
                 .map((m) => {
-                  const live = isMatchLive(m, now);
                   const kickoffEpoch = resolveKickoffEpoch(m);
                   const kickoffLocal = kickoffEpoch
                     ? formatKickoffLocal(kickoffEpoch)
@@ -1088,23 +1188,77 @@ function TodayPage({
                       : m.home_away === "neutral"
                         ? "vs (n)"
                         : "vs";
-                  const status = m.result
-                    ? `Final (${m.result.outcome})`
-                    : live
-                      ? "LIVE"
-                      : "Upcoming";
-                  // When the row has a result, show the score between
-                  // the two team names so the reader can see at a
-                  // glance who scored what. The row's perspective is
-                  // "program on the left, opponent on the right", so
-                  // team_score (which the backend defines as this
-                  // program's score) lines up with the left name.
-                  const teamScore = m.result?.team_score;
-                  const oppScore = m.result?.opponent_score;
+                  const pastLiveWindow =
+                    kickoffEpoch != null &&
+                    now.getTime() > kickoffEpoch + MATCH_WINDOW_MS;
+                  // ESPN scoreboard is the source of truth for live
+                  // state and score once it has caught up to a game:
+                  // state === "in" means we're mid-match (and
+                  // display_clock is like "45'"), "post" is final
+                  // (even if CMS lag has left our NDJSON blank).
+                  const espn = liveScoreFor(m);
+                  const live = espn
+                    ? espn.state === "in"
+                    : isMatchLive(m, now);
+                  // Which side of the row maps to the program and
+                  // which to the opponent — ESPN's scores are keyed
+                  // home/away, UpcomingMatch rows carry their own
+                  // perspective.
+                  const programIsHome = m.home_away !== "away";
+                  const espnTeamScore = espn
+                    ? programIsHome
+                      ? espn.home_score
+                      : espn.away_score
+                    : undefined;
+                  const espnOppScore = espn
+                    ? programIsHome
+                      ? espn.away_score
+                      : espn.home_score
+                    : undefined;
+                  // Score shown in the row. Prefer ESPN once it
+                  // reports a live or final score; fall back to the
+                  // ingested m.result for games ESPN hasn't yet
+                  // (unlikely but defensive).
+                  const haveEspnScore =
+                    espn != null && (espn.state === "in" || espn.state === "post");
+                  const teamScore = haveEspnScore
+                    ? espnTeamScore
+                    : m.result?.team_score;
+                  const oppScore = haveEspnScore
+                    ? espnOppScore
+                    : m.result?.opponent_score;
+                  const hasScore =
+                    teamScore !== undefined && oppScore !== undefined;
                   const programWon =
-                    m.result != null && teamScore! > oppScore!;
+                    hasScore && teamScore! > oppScore!;
                   const opponentWon =
-                    m.result != null && oppScore! > teamScore!;
+                    hasScore && oppScore! > teamScore!;
+                  // Status text: ESPN wins when present; otherwise
+                  // fall back to kickoff-window heuristics against
+                  // ingested data.
+                  const status = espn
+                    ? espn.state === "in"
+                      ? espn.detail || espn.display_clock || "LIVE"
+                      : espn.state === "post"
+                        ? `Final${
+                            hasScore
+                              ? ` (${
+                                  teamScore! > oppScore!
+                                    ? "W"
+                                    : oppScore! > teamScore!
+                                      ? "L"
+                                      : "T"
+                                })`
+                              : ""
+                          }`
+                        : "Upcoming"
+                    : m.result
+                      ? `Final (${m.result.outcome})`
+                      : live
+                        ? "LIVE"
+                        : pastLiveWindow
+                          ? "Final (pending)"
+                          : "Upcoming";
                   return (
                     <tr
                       key={`${m.program_slug}-${m.opponent_slug ?? m.opponent_name}-${m.date}`}
@@ -1123,23 +1277,9 @@ function TodayPage({
                         >
                           {m.program_name || m.program_slug}
                         </button>
-                        {m.result != null ? (
-                          <>
-                            {" "}
-                            <span className="today-score">{teamScore}</span>
-                            {" "}
-                            <span className="today-venue">{venue}</span>
-                            {" "}
-                            <span className="today-score">{oppScore}</span>
-                            {" "}
-                          </>
-                        ) : (
-                          <>
-                            {" "}
-                            <span className="today-venue">{venue}</span>
-                            {" "}
-                          </>
-                        )}
+                        {" "}
+                        <span className="today-venue">{venue}</span>
+                        {" "}
                         {m.opponent_slug ? (
                           <button
                             className={`linklike${opponentWon ? " today-team-winner" : ""}`}
@@ -1180,6 +1320,21 @@ function TodayPage({
                               </button>
                             </>
                           )}
+                      </td>
+                      <td>
+                        {hasScore ? (
+                          <span
+                            className={live ? "today-score today-score-live" : "today-score"}
+                          >
+                            {teamScore}
+                            {" — "}
+                            {oppScore}
+                          </span>
+                        ) : live ? (
+                          <span className="today-score today-score-live">· · ·</span>
+                        ) : (
+                          "—"
+                        )}
                       </td>
                       <td>
                         {m.broadcast_url ? (
