@@ -339,6 +339,28 @@ function initialTheme(): Theme {
     : "light";
 }
 
+// Last conference filter the user had selected on the Standings/RPI/
+// Leaders tabs. Persisted so returning to the app lands on the same
+// conference instead of forcing the user to re-pick from a long list.
+// Empty string ("All") is a valid value and is persisted explicitly.
+const CONFERENCE_FILTER_STORAGE_KEY = "conferenceFilter";
+
+function initialConferenceFilter(): string {
+  try {
+    return localStorage.getItem(CONFERENCE_FILTER_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function persistConferenceFilter(conf: string): void {
+  try {
+    localStorage.setItem(CONFERENCE_FILTER_STORAGE_KEY, conf);
+  } catch {
+    // ignore inaccessible localStorage
+  }
+}
+
 async function captureScreenshotToClipboard(
   target?: HTMLElement | null,
 ): Promise<"ok" | "no-clipboard" | "denied" | "error"> {
@@ -500,17 +522,18 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [showToast]);
 
-  const [view, setView] = useState<View>({
+  const [view, setView] = useState<View>(() => ({
     kind: "standings",
-    conference: "",
+    conference: initialConferenceFilter(),
     tab: "conferences",
-  });
+  }));
   const onConferenceChange = useCallback((c: string) => {
     setView((v) =>
       v.kind === "standings" && v.conference !== c
         ? { ...v, conference: c }
         : v,
     );
+    persistConferenceFilter(c);
   }, []);
   const [dataRevision, setDataRevision] = useState(0);
   useEffect(() => {
