@@ -724,6 +724,10 @@ function BrowsePage({
       ) : tab === "today" ? (
         <TodayPage
           onOpenRoster={(slug, name) => onOpenRoster(slug, name, selected, tab)}
+          onOpenConference={(conf) => {
+            setSelected(conf);
+            setTab("standings");
+          }}
         />
       ) : tab === "rpi" ? (
         <RpiPage
@@ -933,8 +937,10 @@ function TodayTabButton({
 
 function TodayPage({
   onOpenRoster,
+  onOpenConference,
 }: {
   onOpenRoster: (slug: string, name: string) => void;
+  onOpenConference: (conference: string) => void;
 }) {
   const { matches, today, now } = useUpcomingMatches(30_000);
   const [query, setQuery] = useState("");
@@ -1150,10 +1156,30 @@ function TodayPage({
                         )}
                       </td>
                       <td>
-                        {m.conference && labelFor(m.conference)}
+                        {m.conference && (
+                          <button
+                            className="linklike"
+                            onClick={() => onOpenConference(m.conference)}
+                            title={`Open ${fullNameFor(m.conference)} standings`}
+                          >
+                            {labelFor(m.conference)}
+                          </button>
+                        )}
                         {m.opponent_conference &&
-                          m.opponent_conference !== m.conference &&
-                          ` / ${labelFor(m.opponent_conference)}`}
+                          m.opponent_conference !== m.conference && (
+                            <>
+                              {" / "}
+                              <button
+                                className="linklike"
+                                onClick={() =>
+                                  onOpenConference(m.opponent_conference)
+                                }
+                                title={`Open ${fullNameFor(m.opponent_conference)} standings`}
+                              >
+                                {labelFor(m.opponent_conference)}
+                              </button>
+                            </>
+                          )}
                       </td>
                       <td>
                         {m.broadcast_url ? (
